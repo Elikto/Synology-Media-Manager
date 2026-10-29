@@ -50,6 +50,52 @@ class TestManager(unittest.TestCase):
         with self.assertRaises(ValueError):
             APP["release_checksum"](checksum + "  Other.exe")
 
+    def test_media_checks_healthy_storage(self):
+        valid = {
+            "storagePools": [{"status": "normal",
+                              "is_backgroundbuilding": False,
+                              "progress": {"percent": "-1"}}],
+            "volumes": [{"status": "normal"}],
+        }
+        self.assertTrue(APP["check_media_storage"](valid))
+        valid["storagePools"][0]["status"] = "degraded"
+        with self.assertRaises(RuntimeError):
+            APP["check_media_storage"](valid)
+
+    def test_media_share_requires_volume1(self):
+        self.assertFalse(APP["check_media_share"]([]))
+        self.assertTrue(APP["check_media_share"](
+            [{"name": "Media", "vol_path": "/volume1"}]))
+        with self.assertRaises(RuntimeError):
+            APP["check_media_share"](
+                [{"name": "Media", "vol_path": "/volume2"}])
+
+    def test_media_folders_idempotent(self):
+        entries = [{"name": "Films", "isdir": True},
+                   {"name": "Series", "isdir": True}]
+        self.assertEqual(APP["missing_media_folders"](entries), ["Telechargements"])
+        entries.append({"name": "Telechargements", "isdir": True})
+        self.assertEqual(APP["missing_media_folders"](entries), [])
+        with self.assertRaises(RuntimeError):
+            APP["missing_media_folders"]([{"name": "Films", "isdir": False}])
+
+    def test_creation_restricted_to_expected_folders(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+            def request(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                return {}
+        client = FakeClient()
+        APP["create_media_subfolder"](client, "fake_sid", "Films")
+        args, kwargs = client.calls[0]
+        self.assertEqual(args[:3],
+                         ("SYNO.FileStation.CreateFolder", 2, "create"))
+        self.assertEqual(kwargs["sid"], "fake_sid")
+        self.assertEqual(args[3]["folder_path"], '["/Media"]')
+        with self.assertRaises(ValueError):
+            APP["create_media_subfolder"](client, "fake_sid", "../secrets")
+
     def test_sha256(self):
         self.assertEqual(APP["sha256"](b"abc"),
                          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
