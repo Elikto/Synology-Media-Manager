@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
-  "sha256": "15b8c8c952def910ec86d1ea827a0353a3f8a6713e8e48c6bf02dc943eb9e9fa",
-  "notes": "Configuration NAS en un clic : vérification SHR et dossiers, tentative d'installation signée des paquets officiels, réglage Download Station et compte rendu des étapes restantes."
+  "version": "0.6.0",
+  "sha256": "fda8cf6c0f95729b27c97528bd370c9982b79f6a355b30bae2ae43ef05660ec7",
+  "notes": "Automatisation DSM renforcée : installation des paquets signés via séquence Compound, confirmation du résultat, vérification de l'indexation vidéo et jeton de connexion."
 }
