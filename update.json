@@ -1,0 +1,5 @@
+{
+  "version": "0.1.0",
+  "sha256": "a52155fee3d122afee7032387a69aea1c2d410ce7690793b19e50896c50a169e",
+  "notes": "Première version : audit DSM en lecture seule, certificat épinglé, Qwen local et bouton de mise à jour depuis GitHub."
+}
