@@ -32,7 +32,11 @@ jobs:
         run: |
           $manifest = Get-Content -Raw update.json | ConvertFrom-Json
           if ($manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version" }
-          $actual = (Get-FileHash -LiteralPath SynologyMediaManager.pyw -Algorithm SHA256).Hash.ToLowerInvariant()
+          # Git Windows may check out LF source as CRLF; the manifest hashes the GitHub raw (LF) file.
+          $source = [System.IO.File]::ReadAllText((Resolve-Path SynologyMediaManager.pyw))
+          $normalized = $source.Replace("`r`n", "`n")
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+          $actual = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
           Write-Host "Source SHA-256 on Windows: $actual"
           if ($actual -ne $manifest.sha256) { throw "Source checksum mismatch" }
           $expectedVersion = 'VERSION = "' + $manifest.version + '"'
