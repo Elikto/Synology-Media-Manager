@@ -1,4 +1,7 @@
 import runpy
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -95,6 +98,29 @@ class TestManager(unittest.TestCase):
         self.assertEqual(args[3]["folder_path"], '["/Media"]')
         with self.assertRaises(ValueError):
             APP["create_media_subfolder"](client, "fake_sid", "../secrets")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell only")
+    def test_windows_updater_replaces_and_backs_up(self):
+        """Run the same embedded script used for GUI updates in isolated files."""
+        with tempfile.TemporaryDirectory(prefix="SynologyManagerTest") as path:
+            work = Path(path)
+            target = work / "SynologyMediaManager (1).exe"
+            staged = work / "staged.exe"
+            log = work / "updater.log"
+            script = work / "updater.ps1"
+            target.write_bytes(b"old-release")
+            staged.write_bytes(b"new-release")
+            script.write_text(APP["EXE_UPDATER"], encoding="utf-8-sig")
+            completed = subprocess.run([
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(script),
+                "-Target", str(target), "-Staged", str(staged),
+                "-LogPath", str(log), "-NoLaunch"
+            ], capture_output=True, text=True, timeout=45)
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            self.assertEqual(target.read_bytes(), b"new-release")
+            self.assertEqual(Path(str(target) + ".backup").read_bytes(), b"old-release")
+            self.assertIn("Replacement successful", log.read_text(encoding="utf-8-sig"))
 
     def test_sha256(self):
         self.assertEqual(APP["sha256"](b"abc"),
