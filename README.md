@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.7.0 : tableau de bord en direct avec état du SHR, nombre d'éléments multimédias et progression des téléchargements Download Station.** Lecture seule et actualisation automatique toutes les 60 secondes lorsque le programme Windows est ouvert et que le compte DSM est renseigné. Les autres fonctions de configuration sécurisée sont conservées. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.8.0 : centre d'intégrations Sonarr, Radarr, Prowlarr, Kodi et Plex, connexion par API locale/Tailscale, création contrôlée des liaisons Prowlarr et rafraîchissement des bibliothèques Kodi/Plex.** Le tableau de bord du NAS et Download Station restent disponibles.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,30 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Centre d'intégrations *arr, Kodi et Plex — v0.8.0
+
+Cliquer sur **Intégrer Kodi / Plex / *arr** dans l'application. Ce bouton ouvre une seule fenêtre permettant de renseigner les adresses privées (LAN ou Tailscale) des services et leurs clés API, puis de valider une **seule opération** « Tester et connecter les services ».
+
+Le gestionnaire :
+1. Détecte Prowlarr, Sonarr (API v5/v3) et Radarr (API v3), si les services sont joignables et qu'une clé API est renseignée.
+2. Interroge le schéma *réel* des applications Prowlarr et crée les liaisons Prowlarr → Sonarr et Radarr **uniquement si elles n'existent pas déjà**, avec synchronisation prudente `addOnly`. Si la version Prowlarr refuse le schéma ou la configuration, le programme conserve les paramètres existants et journalise le refus.
+3. Demande à **Kodi** de scanner ses sources vidéo existantes via `VideoLibrary.Scan`, à condition que le serveur HTTP/JSON-RPC ait été autorisé dans Kodi.
+4. Demande à **Plex Media Server** de rafraîchir les bibliothèques Films et Séries déjà créées, à l'aide du jeton Plex fourni.
+
+Les clés API restent **uniquement en mémoire pendant l'action**, ne sont pas enregistrées dans un fichier, ni publiées sur GitHub. Les connexions directes sont limitées aux hôtes privés/Tailscale, sans redirection HTTP ; pour les services HTTP, le réseau LAN ou le tunnel Tailscale doit être digne de confiance. Les champs vides sont ignorés.
+
+### Prérequis matériels non contournables
+
+Le DS218j est un NAS ARMv7 32 bits doté de 512 Mo de RAM. Les images Docker actuelles de Prowlarr, Sonarr et Plex Media Server (LinuxServer.io) sont prévues pour x86-64 ou ARM64 : **ce programme ne tente pas de les installer sur le DS218j** et ne force pas Docker. Pour que la chaîne tourne avec le PC Windows éteint, il faut **un autre serveur x64/ARM64 qui reste allumé** (mini-PC, autre NAS compatible, VPS privé, etc.). Sans ce second hôte, Download Station peut continuer sur le Synology, mais les composants *arr externes ne s'exécutent pas 24 h/24. Les logiciels doivent être déjà installés sur leur hôte compatible : ce centre automatise la **connexion et la synchronisation**, pas une installation sur du matériel absent.
+
+### Kodi / Plex
+
+Le scan Kodi exige des sources SMB ou NFS déjà configurées sur l'appareil Kodi et l'accès HTTP/JSON-RPC activé. L'API Kodi `VideoLibrary.Scan` ne crée pas de sources. Plex doit déjà être lancé et posséder des sections Films/Séries ; son scanner ne remplace pas la configuration initiale du serveur. Aucune installation de Plex sur le DS218j n'est imposée.
+
+**Liaison Prowlarr :** les URL envoyées à Prowlarr doivent être joignables **depuis son propre hôte**, pas uniquement depuis Windows. Si les services sont hébergés sur des machines différentes, utiliser leur IP locale/Tailscale plutôt que `127.0.0.1`.
+
+Les tests Windows simulent ces services : les connexions et API ne sont pas encore validées sur ton propre équipement. Aucun fichier multimédia n'est supprimé ni déplacé et aucun paramètre SHR/RAID n'est modifié.
 
 ## Suivi automatique du NAS — v0.7.0
 
