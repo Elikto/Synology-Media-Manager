@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.6.1 : nouveau bouton « Effacer le journal » pour vider les messages affichés, sans modifier le NAS, tout en conservant la configuration automatique et la mise à jour intégrée.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.6.2 : bibliothèque NAS accessible directement en SMB sans indexation DLNA, détection des dossiers vidéo indexés via leur parent et suppression des alertes manuelles inutiles.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,17 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Accès multimédia sans étape manuelle d'indexation — v0.6.2
+
+La configuration automatique peut afficher « Indexation vidéo absente » si le service DLNA de DSM ne référence pas encore `Media/Films` et `Media/Series`. **Ce n'est pas une erreur de Download Station et cela n'empêche pas la lecture directe via SMB**.
+
+- Cliquer sur **Ouvrir bibliothèque** pour ouvrir `\\\\<NAS>\\Media` dans l'Explorateur Windows, sans indexation vidéo ni modification de fichier. Il faut néanmoins que Windows ait accès au service SMB et que le compte possède les droits sur ce partage.
+- Le diagnostic d'indexation reconnaît également un dossier vidéo parent (par exemple `/volume1/Media`) comme couvrant ses sous-dossiers.
+- L'assistant de configuration n'affiche plus systématiquement une fenêtre « dernières étapes » pour la seule indexation DLNA : il inscrit cette information dans le journal.
+- **Pour une TV exclusivement compatible DLNA**, l'indexation des deux dossiers reste une étape distincte dans le Panneau de configuration de DSM. Aucune API Synology fiable et documentée n'a été identifiée pour automatiser en toute sécurité cette création ; l'application ne simule pas une réussite.
+
+Cette version ne force pas l'ouverture de ports Internet, ne change pas le RAID et ne supprime rien du NAS.
 
 ## Effacer le journal — v0.6.1
 
