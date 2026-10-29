@@ -1067,6 +1067,9 @@ class Application:
                         self.monitor_button.configure(text="Suivi automatique : activé")
                         self.log("Suivi automatique NAS activé (lecture seule, toutes les 60 secondes).")
                         self.schedule_monitor()
+                        # Déclencher une première lecture après que l'audit ait libéré
+                        # l'application, sans second clic de l'utilisateur.
+                        self.root.after_idle(self.refresh_dashboard)
                 elif kind == "monitor_finished":
                     self.monitor_busy = False
                 elif kind == "busy":
