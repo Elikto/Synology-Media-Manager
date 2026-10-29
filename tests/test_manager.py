@@ -35,6 +35,19 @@ class TestManager(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(output))
         self.assertNotIn("SECRET", str(output))
 
+    def test_update_log_tail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder) / "update_error.txt"
+            self.assertIn("Aucun journal", APP["update_log_tail"](file))
+            file.write_text(
+                "[00:00] Updater started\n"
+                "[00:01] Replacement successful\n"
+                "[00:02] New executable launched\n", encoding="utf-8")
+            log = APP["update_log_tail"](file, max_lines=2)
+            self.assertNotIn("Updater started", log)
+            self.assertIn("Replacement successful", log)
+            self.assertIn("New executable launched", log)
+
     def test_update_prompt_waits_for_idle(self):
         """Régression : le clic Oui ne doit pas être bloqué par le worker de vérification."""
         import queue
