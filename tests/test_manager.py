@@ -35,6 +35,39 @@ class TestManager(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(output))
         self.assertNotIn("SECRET", str(output))
 
+    def test_clear_log_erases_only_display_and_preserves_future_logs(self):
+        import queue
+
+        class FakeRoot:
+            def after(self, delay, cb):
+                pass
+
+        class FakeLog:
+            def __init__(self):
+                self.contents = ""
+                self.states = []
+            def configure(self, **kwargs):
+                self.states.append(kwargs.get("state"))
+            def insert(self, where, text):
+                self.contents += text
+            def see(self, where):
+                pass
+            def delete(self, start, end):
+                self.contents = ""
+
+        app = APP["Application"].__new__(APP["Application"])
+        app.root = FakeRoot()
+        app.events = queue.Queue()
+        app.logarea = FakeLog()
+        app.log("Ancien message")
+        app.clear_log()
+        app.log("Nouveau message")
+        app.poll()
+        self.assertNotIn("Ancien message", app.logarea.contents)
+        self.assertIn("Nouveau message", app.logarea.contents)
+        self.assertEqual(app.logarea.states[-1], "disabled")
+        self.assertFalse(hasattr(app, "report"))
+
     def test_update_log_tail(self):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder) / "update_error.txt"
