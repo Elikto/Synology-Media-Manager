@@ -180,6 +180,83 @@ class TestManager(unittest.TestCase):
             self.assertEqual(Path(str(target) + ".backup").read_bytes(), b"old-release")
             self.assertIn("Replacement successful", log.read_text(encoding="utf-8-sig"))
 
+    def test_automatic_package_source_guards(self):
+        verifier = APP["verified_synology_package"]
+        valid = {"id": "DownloadStation", "maintainer": "Synology Inc.",
+                 "link": "https://global.synologydownload.com/DownloadStation.spk",
+                 "md5": "b" * 32, "size": 12_000_000}
+        self.assertEqual(verifier(valid, "DownloadStation")["id"], "DownloadStation")
+        for change in [
+            {"maintainer": "Random Maintainer"},
+            {"link": "https://updates.synologydownload.com.evil.example/app.spk"},
+            {"link": "http://global.synologydownload.com/app.spk"},
+            {"md5": "not-a-checksum"},
+            {"size": 10},
+            {"deppkgs": ["UnknownDependency"]},
+        ]:
+            with self.subTest(change=change), self.assertRaises((RuntimeError, ValueError)):
+                verifier({**valid, **change}, "DownloadStation")
+        with self.assertRaises(ValueError):
+            verifier(valid, "PlexMediaServer")
+
+    def test_automated_install_never_forces_or_uninstalls(self):
+        class FakeDSM:
+            def __init__(self):
+                self.calls = []
+            def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+                self.calls.append((api, method, params, sid))
+                if method == "install" and params.get("operation") == "install":
+                    return {"taskid": "@SYNOPKG_DOWNLOAD_DownloadStation"}
+                if method == "status":
+                    return {"finished": True, "progress": 1}
+                if api.endswith("Installation.Download") and method == "check":
+                    return {"id": "DownloadStation",
+                            "maintainer": "Synology Inc.",
+                            "filename": "/volume1/@tmp/synopkg/download.x/DownloadStation"}
+                if method == "check":
+                    return {"volume_list": [{"mount_point": "/volume1"}],
+                            "is_occupied": False}
+                return {}
+        dsm = FakeDSM()
+        spec = {"id": "DownloadStation",
+                "url": "https://global.synologydownload.com/test.spk",
+                "md5": "b" * 32, "size": 100_000}
+        APP["install_verified_synology_package"](dsm, "fake_sid", spec, lambda message: None,
+                                                    sleep=lambda seconds: None)
+        methods = [x[1] for x in dsm.calls]
+        self.assertNotIn("uninstall", methods)
+        self.assertNotIn("delete", methods)
+        final = dsm.calls[-1]
+        self.assertEqual(final[2]["check_codesign"], "true")
+        self.assertEqual(final[2]["force"], "false")
+        self.assertEqual(final[2]["volume_path"], "/volume1")
+
+    def test_download_destination_is_idempotent_and_rechecked(self):
+        class FakeDSM:
+            def __init__(self, current):
+                self.current = current
+                self.calls = []
+            def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+                self.calls.append((api, method, params))
+                if api == "SYNO.API.Info":
+                    return {"SYNO.DownloadStation.Info":
+                            {"path": "DownloadStation/info.cgi", "maxVersion": 2}}
+                if method == "getconfig":
+                    return {"default_destination": self.current}
+                if method == "setserverconfig":
+                    self.current = params["default_destination"]
+                    return {}
+                raise AssertionError("Unexpected method")
+        unchanged = FakeDSM("Media/Telechargements")
+        self.assertEqual(APP["configure_default_download_destination"](
+            unchanged, "sid", lambda message: None), "unchanged")
+        self.assertNotIn("setserverconfig", [x[1] for x in unchanged.calls])
+        changed = FakeDSM("downloads")
+        self.assertEqual(APP["configure_default_download_destination"](
+            changed, "sid", lambda message: None), "configured")
+        self.assertEqual(changed.current, "Media/Telechargements")
+        self.assertEqual(sum(1 for call in changed.calls if call[1] == "setserverconfig"), 1)
+
     def test_download_uri_validation(self):
         f = APP["validated_download_uri"]
         self.assertEqual(f("https://example.org/video.mp4"), "https://example.org/video.mp4")
