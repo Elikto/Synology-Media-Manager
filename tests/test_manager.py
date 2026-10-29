@@ -263,6 +263,32 @@ class TestManager(unittest.TestCase):
         self.assertEqual(compound[1]["volume_path"], "/volume1")
         self.assertEqual(final[2]["stop_when_error"], "true")
 
+    def test_wait_package_checks_real_state_and_never_installs_again(self):
+        class FakeDSM:
+            def __init__(self):
+                self.checks = 0
+                self.methods = []
+            def request(self, api, version, method, params=None, sid=None):
+                self.checks += 1
+                self.methods.append(method)
+                if self.checks < 3:
+                    return {"packages": []}
+                return {"packages": [{"id": "DownloadStation",
+                                      "name": "Download Station"}]}
+        fake = FakeDSM()
+        result = APP["wait_for_package"](fake, "sid", "DownloadStation",
+             lambda text: None, sleep=lambda secs: None, attempts=5)
+        self.assertTrue(result)
+        self.assertEqual(fake.checks, 3)
+        self.assertEqual(set(fake.methods), {"list"})
+
+    def test_wait_package_returns_false_when_dsm_never_confirms(self):
+        class FakeDSM:
+            def request(self, api, version, method, params=None, sid=None):
+                return {"packages": []}
+        self.assertFalse(APP["wait_for_package"](FakeDSM(), "sid", "MediaServer",
+            lambda text: None, sleep=lambda secs: None, attempts=2))
+
     def test_media_indexing_status_read_only(self):
         class FakeDSM:
             def __init__(self, folders):
