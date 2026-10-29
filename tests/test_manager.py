@@ -35,6 +35,51 @@ class TestManager(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(output))
         self.assertNotIn("SECRET", str(output))
 
+    def test_update_prompt_waits_for_idle(self):
+        """Régression : le clic Oui ne doit pas être bloqué par le worker de vérification."""
+        import queue
+
+        class FakeRoot:
+            def __init__(self):
+                self.idle = []
+            def after_idle(self, cb):
+                self.idle.append(cb)
+            def after(self, delay, cb):
+                pass
+
+        class FakeStatus:
+            def set(self, value):
+                pass
+
+        class FakeProgress:
+            def start(self, milliseconds):
+                pass
+            def stop(self):
+                pass
+
+        app = APP["Application"].__new__(APP["Application"])
+        app.root = FakeRoot()
+        app.events = queue.Queue()
+        app.busy = False
+        app.pending_update = None
+        app.status = FakeStatus()
+        app.progress = FakeProgress()
+        app.log = lambda message: None
+        offered = []
+        app.offer_update = lambda info: offered.append((info, app.busy))
+
+        app.events.put(("busy", True))
+        app.events.put(("update", ("0.4.2", "exe")))
+        app.events.put(("busy", False))
+        app.poll()
+
+        self.assertFalse(app.busy)
+        self.assertEqual(offered, [])
+        self.assertEqual(len(app.root.idle), 1)
+        app.root.idle[0]()
+        self.assertEqual(offered, [(("0.4.2", "exe"), False)])
+        self.assertIsNone(app.pending_update)
+
     def test_github_release_version(self):
         release = {
             "tag_name": "v0.2.0", "draft": False, "prerelease": False,
