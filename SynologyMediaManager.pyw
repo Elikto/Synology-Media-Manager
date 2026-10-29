@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.6.2"
+VERSION = "0.7.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -293,6 +293,57 @@ def create_downloadstation_task(client, sid, uri):
         {"uri": verified, "destination": "Media/Telechargements"},
         sid=sid, path=api_path)
 
+
+
+
+MEDIA_OVERVIEW_FOLDERS = ("Films", "Series", "Telechargements")
+REFRESH_INTERVAL_MS = 60_000
+
+
+def media_folder_overview(client, sid):
+    """Comptage strictement en lecture seule, sans récursion et sans liste de fichiers."""
+    result = {}
+    for folder in MEDIA_OVERVIEW_FOLDERS:
+        data = client.request("SYNO.FileStation.List", 2, "list",
+            {"folder_path": json.dumps("/Media/" + folder),
+             "offset": "0", "limit": "1"}, sid=sid)
+        try:
+            count = int(data.get("total", -1))
+        except (TypeError, ValueError):
+            count = -1
+        if count < 0:
+            raise RuntimeError("Comptage File Station non valide pour " + folder)
+        result[folder] = count
+    return result
+
+
+def download_task_overview(tasks, total, max_rows=30):
+    """Résumé sans exposer les URL, torrents, identifiants ni dossiers personnels."""
+    if not isinstance(tasks, list) or not isinstance(total, int) or total < 0:
+        raise RuntimeError("Liste Download Station non valide.")
+    rows = []
+    for task in tasks[:max_rows]:
+        if not isinstance(task, dict):
+            continue
+        title = re.sub(r"[\r\n\t]", " ", str(task.get("title") or "Sans titre")).strip()
+        title = title[:90] or "Sans titre"
+        status = str(task.get("status") or "inconnu").lower()[:28]
+        try:
+            size = max(0, int(task.get("size") or 0))
+        except (ValueError, TypeError):
+            size = 0
+        additional = task.get("additional")
+        additional = additional if isinstance(additional, dict) else {}
+        transfer = additional.get("transfer")
+        transfer = transfer if isinstance(transfer, dict) else {}
+        try:
+            done = max(0, int(task.get("size_downloaded") or
+                              transfer.get("size_downloaded") or 0))
+        except (ValueError, TypeError):
+            done = 0
+        progress = str(round(min(100.0, 100 * done / size), 1)) + "%" if size else "—"
+        rows.append((title, status, progress, round(size / 1_048_576, 1)))
+    return {"total": total, "rows": rows}
 
 
 AUTOMATION_PACKAGES = ("DownloadStation", "MediaServer")
@@ -766,13 +817,16 @@ class Application:
     def __init__(self, root):
         self.root = root
         root.title("Synology Media Manager " + VERSION)
-        root.geometry("1120x750")
+        root.geometry("1120x830")
         self.events = queue.Queue()
         self.busy = False
         self.latest = None
         self.report = None
         self.pending_fp = None
         self.pending_update = None
+        self.auto_monitor = False
+        self.monitor_scheduled = False
+        self.monitor_busy = False
         self.cfg = load_config()
         self.host = tk.StringVar(value=self.cfg["host"])
         self.port = tk.StringVar(value=str(self.cfg["port"]))
@@ -824,6 +878,33 @@ class Application:
         ttk.Button(download_row, text="Ajouter un téléchargement", command=self.add_download).pack(side="left", padx=3)
         ttk.Label(download_row, text="Installation des paquets depuis DSM.",
                   foreground="#526577").pack(side="left", padx=8)
+        dashboard = ttk.LabelFrame(outer, text="État du NAS et des téléchargements — lecture seule", padding=8)
+        dashboard.pack(fill="x", pady=(0, 8))
+        dashboard_controls = ttk.Frame(dashboard)
+        dashboard_controls.pack(fill="x")
+        ttk.Button(dashboard_controls, text="Actualiser état", command=self.refresh_dashboard).pack(side="left", padx=(0, 8))
+        self.monitor_button = ttk.Button(dashboard_controls, text="Suivi automatique : désactivé",
+                                         command=self.toggle_monitor)
+        self.monitor_button.pack(side="left")
+        self.dashboard_summary = tk.StringVar(value="Connecte-toi au NAS pour afficher son état.")
+        self.dashboard_media = tk.StringVar(value="Bibliothèque : en attente")
+        ttk.Label(dashboard, textvariable=self.dashboard_summary).pack(anchor="w", pady=(6, 1))
+        ttk.Label(dashboard, textvariable=self.dashboard_media).pack(anchor="w", pady=(0, 4))
+        table_frame = ttk.Frame(dashboard)
+        table_frame.pack(fill="x")
+        self.download_table = ttk.Treeview(table_frame,
+            columns=("title", "status", "progress", "size"), show="headings",
+            height=5, selectmode="none")
+        for field, header, width in (
+                ("title", "Téléchargement", 480), ("status", "État", 135),
+                ("progress", "Progression", 115), ("size", "Taille (Mio)", 115)):
+            self.download_table.heading(field, text=header)
+            self.download_table.column(field, width=width, minwidth=75,
+                                       stretch=(field == "title"))
+        self.download_table.pack(side="left", fill="x", expand=True)
+        scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.download_table.yview)
+        scroll.pack(side="right", fill="y")
+        self.download_table.configure(yscrollcommand=scroll.set)
         ttk.Label(outer, textvariable=self.status).pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
         self.progress.pack(fill="x", pady=(4, 8))
@@ -831,7 +912,7 @@ class Application:
         journal_row.pack(fill="x", pady=(0, 5))
         ttk.Label(journal_row, text="Journal des opérations").pack(side="left")
         ttk.Button(journal_row, text="Effacer le journal", command=self.clear_log).pack(side="right")
-        self.logarea = tk.Text(outer, font=("Consolas", 10), wrap="word", height=23)
+        self.logarea = tk.Text(outer, font=("Consolas", 10), wrap="word", height=13)
         self.logarea.pack(fill="both", expand=True)
         self.logarea.configure(state="disabled")
         ttk.Label(outer, text="Lecture seule par défaut ; création de dossiers et nouvelles tâches uniquement sur confirmation. "
@@ -852,6 +933,107 @@ class Application:
     def log(self, value):
         self.events.put(("log", str(value)))
 
+    def schedule_monitor(self):
+        if self.auto_monitor and not self.monitor_scheduled:
+            self.monitor_scheduled = True
+            self.root.after(REFRESH_INTERVAL_MS, self.monitor_tick)
+
+    def monitor_tick(self):
+        self.monitor_scheduled = False
+        if not self.auto_monitor:
+            return
+        # Ne lance jamais deux sondes simultanément ni pendant une opération de configuration.
+        if not self.busy and not self.monitor_busy:
+            self.refresh_dashboard(quiet=True)
+        self.schedule_monitor()
+
+    def toggle_monitor(self):
+        self.auto_monitor = not self.auto_monitor
+        self.monitor_button.configure(text="Suivi automatique : " +
+                                     ("activé" if self.auto_monitor else "désactivé"))
+        self.log("Suivi automatique " + ("activé (toutes les 60 secondes)." if
+                                        self.auto_monitor else "désactivé."))
+        if self.auto_monitor:
+            self.refresh_dashboard()
+            self.schedule_monitor()
+
+    def refresh_dashboard(self, quiet=False):
+        """Rafraîchit un seul panneau en lecture seule. Secrets jamais persistés."""
+        if self.busy or self.monitor_busy:
+            return
+        user, password = self.username.get().strip(), self.password.get()
+        if not user or not password:
+            if not quiet:
+                messagebox.showwarning("DSM", "Saisis tes identifiants DSM pour afficher le tableau de bord.")
+            return
+        try:
+            host, port = self.settings()
+        except Exception as exc:
+            if not quiet:
+                messagebox.showerror("Connexion NAS", str(exc))
+            return
+        fingerprint = self.cfg.get("fingerprint", "")
+        self.monitor_busy = True
+        def job():
+            client = None
+            core = fs = dl = None
+            try:
+                client = DsmClient(host, port, fingerprint)
+                summary = "NAS accessible"
+                media = "Bibliothèque : état indisponible"
+                rows = []
+                core = client.login(user, password)
+                storage = client.request("SYNO.Storage.CGI.Storage", 1, "load_info", sid=core)
+                report = redact_report(storage)
+                disks = report.get("disks") or []
+                pools = report.get("pools") or []
+                pool_text = str(pools[0].get("status") or "inconnu") if pools else "inconnu"
+                anomalies = []
+                for disk in disks:
+                    try:
+                        if int(disk.get("unc") or 0) > 0:
+                            anomalies.append(str(disk.get("name") or "Disque") + " : UNC=" + str(disk["unc"]))
+                    except (ValueError, TypeError):
+                        pass
+                summary = "Stockage SHR : " + pool_text
+                if anomalies:
+                    summary += " | À surveiller : " + ", ".join(anomalies)
+                try:
+                    fs = client.login(user, password, session="FileStation")
+                    counts = media_folder_overview(client, fs)
+                    media = "Bibliothèque Media : " + " · ".join(
+                        f"{folder} : {counts[folder]} élément(s)"
+                        for folder in MEDIA_OVERVIEW_FOLDERS)
+                except Exception as error:
+                    media = "Bibliothèque : vérification impossible (" + str(error)[:120] + ")"
+                try:
+                    dl = client.login(user, password, session="DownloadStation")
+                    tasks, total = downloadstation_tasks(client, dl)
+                    data = download_task_overview(tasks, total)
+                    rows = data["rows"]
+                    summary += f" | Download Station : {data['total']} tâche(s)"
+                except Exception as error:
+                    summary += " | Download Station : non disponible (" + str(error)[:100] + ")"
+                self.events.put(("dashboard", {"summary": summary, "media": media, "rows": rows}))
+                if not quiet:
+                    self.log("Tableau de bord actualisé en lecture seule.")
+            except Exception as error:
+                self.events.put(("dashboard", {
+                    "summary": "Connexion NAS impossible : " + str(error)[:200],
+                    "media": "Bibliothèque : en attente", "rows": []}))
+                if not quiet:
+                    self.log("ERREUR de connexion au tableau de bord : " + str(error))
+            finally:
+                if client is not None:
+                    if dl:
+                        client.logout(dl, session="DownloadStation")
+                    if fs:
+                        client.logout(fs, session="FileStation")
+                    if core:
+                        client.logout(core)
+                self.events.put(("monitor_finished", None))
+        threading.Thread(target=job, daemon=True).start()
+
     def clear_log(self):
         # Traite l'effacement dans l'ordre des événements : même si un audit
         # tourne, les anciens messages disparaissent avant les nouveaux.
@@ -871,6 +1053,22 @@ class Application:
                     self.logarea.configure(state="normal")
                     self.logarea.delete("1.0", "end")
                     self.logarea.configure(state="disabled")
+                elif kind == "dashboard":
+                    info = value
+                    self.dashboard_summary.set(info["summary"])
+                    self.dashboard_media.set(info["media"])
+                    for item in self.download_table.get_children():
+                        self.download_table.delete(item)
+                    for item in info["rows"]:
+                        self.download_table.insert("", "end", values=item)
+                elif kind == "dashboard_start":
+                    if not self.auto_monitor:
+                        self.auto_monitor = True
+                        self.monitor_button.configure(text="Suivi automatique : activé")
+                        self.log("Suivi automatique NAS activé (lecture seule, toutes les 60 secondes).")
+                        self.schedule_monitor()
+                elif kind == "monitor_finished":
+                    self.monitor_busy = False
                 elif kind == "busy":
                     self.busy = value
                     self.status.set("Opération en cours…" if value else "Prêt")
@@ -1152,6 +1350,7 @@ class Application:
 
                 self.log("Pour le téléphone PC éteint : utiliser Download Station depuis DSM via Tailscale/QuickConnect.")
                 self.log("=== Résultat : configuration automatique terminée ===")
+                self.events.put(("dashboard_start", None))
             finally:
                 if dl_sid:
                     client.logout(dl_sid, session="DownloadStation")
@@ -1302,6 +1501,7 @@ class Application:
                 except Exception as exc:
                     self.log("Paquets non disponibles : " + str(exc))
                 self.log("Audit terminé : aucune écriture sur le NAS.")
+                self.events.put(("dashboard_start", None))
             finally:
                 if sid:
                     client.logout(sid)
