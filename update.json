@@ -1,5 +1,5 @@
 {
-  "version": "0.4.1",
-  "sha256": "e5862dad5097a5c2484ce6f1cdf467c124182216b9011c69664010d68ba9ffc0",
-  "notes": "Correctif : la fenêtre de mise à jour s'ouvre une fois la tâche de vérification terminée. L'installation est désormais lancée après confirmation."
+  "version": "0.4.2",
+  "sha256": "e0a26c6bddf60390d254b8b459edea25df5264f9c41b72e97d3bc8ff96ecccc4",
+  "notes": "Nouvel écran de diagnostic : bouton Journal MAJ. Release de test de mise à jour depuis la version 0.4.1."
 }
