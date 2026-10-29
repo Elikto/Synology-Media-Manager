@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.4.2 : bouton « Journal MAJ » pour consulter les résultats de mise à jour, correctif du bouton de téléchargement, bibliothèque multimédia et gestion de Download Station.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.5.0 : bouton « Configurer automatiquement » pour préparer la bibliothèque et tenter l’installation contrôlée des paquets officiels, tout en conservant les diagnostics et la mise à jour intégrée.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,22 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Configuration en un clic : v0.5.0
+
+**Objectif : une seule action dans le programme, après avoir saisi les identifiants DSM.**
+
+1. Dans la version **0.4.2**, cliquer sur **Vérifier les mises à jour** et accepter la **0.5.0**. Le bouton intégré conserve le même fichier EXE.
+2. Dans la version 0.5.0, cliquer sur **Configurer automatiquement**, puis confirmer **une seule fois** les modifications proposées.
+3. L'application vérifie le SHR, le volume et le partage `Media`, et crée seulement les sous-dossiers manquants. Elle tente ensuite de récupérer **DownloadStation** et **MediaServer** via le catalogue de paquets de DSM **uniquement** s'ils sont proposés par Synology pour ce NAS, avec contrôle de l'éditeur, du domaine de téléchargement et de la signature de paquet, sans forcer l'installation.
+4. Si Download Station est disponible, l'application essaie de paramétrer sa destination par défaut sur `Media/Telechargements` et relit la configuration pour vérifier le résultat.
+5. Elle indique dans le journal les opérations réussies et les **éventuelles étapes restantes**, avec proposition d'ouvrir DSM.
+
+**Limite importante** : les API internes d'installation des paquets peuvent varier selon DSM et les permissions. Cette fonction est testée avec des NAS simulés ; **elle n'est pas encore validée sur un DS218j réel**. Elle n'exécute jamais de formatage, suppression, désinstallation, upgrade forcée ou changement de RAID. Si un paquet est inconnu, tiers, signé par un éditeur non confirmé, incompatible, ou nécessite des dépendances, **l'installation est refusée** et DSM doit prendre le relais.
+
+Pour la découverte DLNA, les dossiers `Media/Films` et `Media/Series` doivent encore être ajoutés comme dossiers **Vidéo** dans **DSM > Panneau de configuration > Service d'indexation** : cette configuration n'utilise pas ici d'API d'écriture non vérifiée.
+
+**PC éteint :** les téléchargements démarrés par Download Station continuent sur le NAS allumé, sans le programme Windows. Pour les piloter depuis un smartphone, accéder à DSM (QuickConnect ou Tailscale) et ouvrir Download Station ; ne jamais exposer directement SMB à Internet. Le serveur DS218j a 512 Mo de RAM : privilégier la lecture directe par SMB et DLNA, pas le transcodage vidéo.
 
 ## Installer les paquets et gérer les téléchargements (v0.4.0)
 
