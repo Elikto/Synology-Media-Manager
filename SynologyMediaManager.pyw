@@ -471,6 +471,15 @@ def wait_for_package(client, sid, package_id, log, sleep=None, attempts=20):
     return False
 
 
+def unc_media_path(host):
+    """Chemin UNC vers le seul partage multimédia, sans connexion DSM."""
+    value = str(host).strip()
+    if (not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", value) or
+            value.startswith(("-", ".")) or value.endswith(".")):
+        raise ValueError("Hôte réseau SMB invalide.")
+    return "\\\\" + value + "\\Media"
+
+
 def media_index_status(client, sid):
     """Contrôle en lecture seule ; n'utilise pas une API d'écriture inconnue."""
     details = client.request("SYNO.API.Info", 1, "query",
@@ -502,10 +511,16 @@ def media_index_status(client, sid):
         if "video" in kinds or "2" in kinds or item.get("video") is True:
             found.add(path)
     wanted = {"/volume1/Media/Films", "/volume1/Media/Series"}
-    if wanted.issubset(found):
-        return "ready", "Les deux dossiers vidéo sont indexés."
-    return "missing", "Indexation vidéo absente : " + ", ".join(sorted(wanted - found))
-
+    # L'indexation d'un dossier parent vidéo inclut aussi ses sous-dossiers.
+    def covers(target, indexed_path):
+        if indexed_path.startswith("/Media/") or indexed_path == "/Media":
+            indexed_path = "/volume1" + indexed_path
+        return target == indexed_path or target.startswith(indexed_path + "/")
+    missing = {target for target in wanted
+               if not any(covers(target, path) for path in found if path)}
+    if not missing:
+        return "ready", "Les dossiers vidéo sont couverts par l'indexation."
+    return "missing", "Indexation vidéo absente : " + ", ".join(sorted(missing))
 
 def downloadstation_info_api(client):
     result = client.request("SYNO.API.Info", 1, "query",
@@ -962,11 +977,9 @@ class Application:
         """Ouvre le partage NAS via SMB, sans indexation DLNA."""
         try:
             host, _port = self.settings()
-            if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or host.startswith("-"):
-                raise ValueError("Nom ou adresse du NAS non valide pour SMB.")
+            share_path = unc_media_path(host)
             if os.name != "nt" or not hasattr(os, "startfile"):
                 raise RuntimeError("L'ouverture directe SMB nécessite Windows.")
-            share_path = "\\\\" + host + "\\Media"
             os.startfile(share_path)
             self.log("Bibliothèque NAS ouverte dans l'Explorateur Windows (SMB).")
             self.log("SMB fonctionne sans indexation DLNA si le service et les droits sont actifs.")
