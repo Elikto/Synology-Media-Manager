@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0",
-  "sha256": "64782dfb7fd74094a3d860d4db6429f9f21b559e470d2a9d4725ada68c6d3570",
-  "notes": "Gestion Download Station : aide à l'installation DSM, liste des tâches et ajout de liens après confirmation, accès mobile via DSM."
+  "version": "0.4.1",
+  "sha256": "e5862dad5097a5c2484ce6f1cdf467c124182216b9011c69664010d68ba9ffc0",
+  "notes": "Correctif : la fenêtre de mise à jour s'ouvre une fois la tâche de vérification terminée. L'installation est désormais lancée après confirmation."
 }
