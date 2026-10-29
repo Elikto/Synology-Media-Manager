@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.4.1 : correctif du bouton « Vérifier les mises à jour », diagnostic DSM, bibliothèque multimédia et gestion de Download Station.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.4.2 : bouton « Journal MAJ » pour consulter les résultats de mise à jour, correctif du bouton de téléchargement, bibliothèque multimédia et gestion de Download Station.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -52,6 +52,14 @@ Pour programmer un téléchargement depuis un téléphone lorsque le PC est éte
 ### Compatibilité
 
 Le DS218j n'a que 512 Mo de RAM, donc ne pas multiplier les applications lourdes ou exiger un transcodage vidéo. Pour la lecture : Kodi sur box Android TV, VLC sur PC/Android et Infuse/VLC sur iPhone en accédant au NAS par SMB sécurisé. Le DLNA est limité au réseau local et doit indexer les dossiers.
+
+## Tester les mises à jour : v0.4.1 → v0.4.2
+
+Cette release sert notamment à valider le bouton **Vérifier les mises à jour** corrigé en v0.4.1. **Depuis la version 0.4.1**, cliquer sur le bouton, accepter la version **0.4.2**, puis laisser l'application redémarrer. Le journal principal doit ensuite afficher `Version 0.4.2 prête`.
+
+**Nouveauté : « Journal MAJ »** dans la seconde rangée de l'application. Ce bouton affiche les dernières étapes du script de remplacement Windows (réussite ou échec) sans ouvrir PowerShell. Le journal est stocké uniquement sur le PC, dans `%LOCALAPPDATA%\\SynologyMediaManager\\update_error.txt`.
+
+La publication GitHub réussie **ne garantit pas** que l'installation sur le PC de chaque utilisateur fonctionne : le test final de mise à jour intégrée doit être confirmé sur Windows avec la version 0.4.1.
 
 ## Correctif important : mise à jour v0.4.1
 
