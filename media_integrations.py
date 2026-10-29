@@ -157,6 +157,64 @@ def link_prowlarr(prowlarr, prowlarr_key, targets, opener=None):
     return results
 
 
+def installed_video_servers(packages):
+    """Repère les paquets DSM déjà installés, sans les démarrer ni les modifier."""
+    if not isinstance(packages, list):
+        return set()
+    found = set()
+    for item in packages:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").lower()
+        package_id = str(item.get("id") or item.get("package_id") or "").lower()
+        if ("plex media server" in name or package_id in ("plexmediaserver", "plex")):
+            found.add("Plex")
+        if ("emby server" in name or package_id in ("embyserver", "emby")):
+            found.add("Emby")
+    return found
+
+
+def video_server_address(service, host):
+    """Uniquement les interfaces locales des deux serveurs déjà installables."""
+    paths = {"Plex": (32400, "/web"), "Emby": (8096, "/web/index.html")}
+    if service not in paths:
+        raise ValueError("Serveur vidéo non autorisé.")
+    port, page = paths[service]
+    return service_address(host, port) + page
+
+
+def probe_video_server(service, host, opener=None):
+    """Vérification en lecture seule sans authentification ni donnée privée publiée."""
+    if service == "Plex":
+        raw = local_request(host, 32400, "/identity", opener=opener)
+        root = ET.fromstring(raw)
+        if root.tag != "MediaContainer":
+            raise RuntimeError("Réponse Plex inconnue.")
+        version = str(root.attrib.get("version") or "")
+    elif service == "Emby":
+        # DSM / anciennes versions Emby peuvent exposer /emby ou la racine.
+        last_error = None
+        for path in ("/emby/System/Info/Public", "/System/Info/Public"):
+            try:
+                raw = local_request(host, 8096, path, opener=opener)
+                info = json.loads(raw.decode("utf-8"))
+                if not isinstance(info, dict):
+                    raise RuntimeError("Réponse Emby inconnue.")
+                version = str(info.get("Version") or "")
+                if version:
+                    break
+            except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
+                last_error = error
+        else:
+            raise RuntimeError("Emby ne répond pas sur le port 8096.") from last_error
+    else:
+        raise ValueError("Serveur vidéo non autorisé.")
+    # Ne retourne jamais le nom du NAS, son identifiant serveur ou son adresse.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,60}", version):
+        raise RuntimeError("Version du serveur non reconnue.")
+    return version
+
+
 def kodi_scan(host, port, username="", password="", opener=None):
     payload = {"jsonrpc": "2.0", "id": 1, "method": "VideoLibrary.Scan",
                "params": {"showdialogs": False}}
