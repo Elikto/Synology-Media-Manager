@@ -32,6 +32,24 @@ class TestManager(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(output))
         self.assertNotIn("SECRET", str(output))
 
+    def test_github_release_version(self):
+        release = {
+            "tag_name": "v0.2.0", "draft": False, "prerelease": False,
+            "assets": [{"name": "SynologyMediaManager.exe"},
+                       {"name": "SHA256SUMS.txt"}]
+        }
+        self.assertEqual(APP["release_version"](release), "0.2.0")
+        release["assets"] = []
+        with self.assertRaises(ValueError):
+            APP["release_version"](release)
+
+    def test_executable_checksum_format(self):
+        checksum = "b" * 64
+        self.assertEqual(APP["release_checksum"](
+            checksum + "  SynologyMediaManager.exe\n"), checksum)
+        with self.assertRaises(ValueError):
+            APP["release_checksum"](checksum + "  Other.exe")
+
     def test_sha256(self):
         self.assertEqual(APP["sha256"](b"abc"),
                          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
