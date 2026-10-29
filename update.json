@@ -1,5 +1,5 @@
 {
-  "version": "0.4.2",
-  "sha256": "e0a26c6bddf60390d254b8b459edea25df5264f9c41b72e97d3bc8ff96ecccc4",
-  "notes": "Nouvel écran de diagnostic : bouton Journal MAJ. Release de test de mise à jour depuis la version 0.4.1."
+  "version": "0.5.0",
+  "sha256": "15b8c8c952def910ec86d1ea827a0353a3f8a6713e8e48c6bf02dc943eb9e9fa",
+  "notes": "Configuration NAS en un clic : vérification SHR et dossiers, tentative d'installation signée des paquets officiels, réglage Download Station et compte rendu des étapes restantes."
 }
