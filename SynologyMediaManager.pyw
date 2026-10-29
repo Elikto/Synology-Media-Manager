@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -339,83 +339,149 @@ def verified_synology_package(item, expected_id):
 
 
 def package_api_info(client):
-    names = "SYNO.Core.Package.Server,SYNO.Core.Package.Installation,SYNO.Core.Package.Installation.Download"
+    """Découvre les versions réelles au lieu d'imposer la version 1."""
+    names = ("SYNO.Core.Package.Server", "SYNO.Core.Package.Installation",
+             "SYNO.Core.Package.Installation.Download", "SYNO.Entry.Request")
     result = client.request("SYNO.API.Info", 1, "query",
-                            {"query": names}, path="query.cgi")
+                            {"query": ",".join(names)}, path="query.cgi")
     if not isinstance(result, dict):
         raise RuntimeError("Découverte des API de paquets impossible.")
-    for name in names.split(","):
+    for name in names:
         details = result.get(name)
         if not isinstance(details, dict) or details.get("path") != "entry.cgi":
-            raise RuntimeError("API DSM incompatible : " + name)
-        if int(details.get("minVersion", 99)) > 1 or int(details.get("maxVersion", 0)) < 1:
-            raise RuntimeError("Version d'API DSM non prise en charge : " + name)
+            raise RuntimeError("API de paquets absente ou chemin inattendu : " + name)
+        try:
+            minimum = int(details["minVersion"])
+            maximum = int(details["maxVersion"])
+        except (ValueError, KeyError, TypeError):
+            raise RuntimeError("Version de l'API de paquets inconnue : " + name)
+        if minimum < 1 or maximum < minimum or maximum > 20:
+            raise RuntimeError("Version de l'API de paquets inattendue : " + name)
     return result
 
 
 def official_installable_packages(client, sid):
-    package_api_info(client)
-    result = client.request("SYNO.Core.Package.Server", 1, "list",
+    api = package_api_info(client)
+    version = int(api["SYNO.Core.Package.Server"]["maxVersion"])
+    result = client.request("SYNO.Core.Package.Server", version, "list",
         {"blforcereload": "false", "blloadothers": "false"}, sid=sid)
     packages = result.get("packages")
     if not isinstance(packages, list):
-        raise RuntimeError("Aucun catalogue de paquets compatible renvoyé par DSM.")
+        raise RuntimeError("Catalogue de paquets indisponible pour ce modèle/DSM.")
     return {p.get("id"): p for p in packages if isinstance(p, dict)}
 
 
+def package_install_response_ok(data):
+    """Une réponse compound partielle n'est jamais considérée comme un succès."""
+    if not isinstance(data, dict) or data.get("has_fail") is not False:
+        raise RuntimeError("Réponse d'installation DSM non confirmée.")
+    result = data.get("result")
+    if not isinstance(result, list) or len(result) != 2:
+        raise RuntimeError("DSM n'a pas validé les deux étapes d'installation.")
+    for entry in result:
+        if not isinstance(entry, dict) or entry.get("success") is not True:
+            raise RuntimeError("DSM a refusé une étape de l'installation.")
+    return True
+
+
 def install_verified_synology_package(client, sid, spec, log, sleep=None):
-    """Une installation signée et non forcée. Aucun effacement, upgrade ou uninstall."""
+    """Installation officielle après vérification, jamais de force ni de désinstallation."""
     if sleep is None:
         import time
         sleep = time.sleep
     pkg_id = spec["id"]
     if pkg_id not in AUTOMATION_PACKAGES:
         raise ValueError("Paquet non autorisé.")
-    log(f"{pkg_id} : téléchargement officiel demandé à DSM.")
-    started = client.request("SYNO.Core.Package.Installation", 1, "install", {
+    # Vérifier de nouveau les versions d'API avant toute opération.
+    api = package_api_info(client)
+    installation_version = int(api["SYNO.Core.Package.Installation"]["minVersion"])
+    download_version = int(api["SYNO.Core.Package.Installation.Download"]["minVersion"])
+    compound_version = int(api["SYNO.Entry.Request"]["maxVersion"])
+    log(f"{pkg_id} : récupération du paquet officiel par DSM…")
+    started = client.request("SYNO.Core.Package.Installation", installation_version, "install", {
         "operation": "install", "type": "0", "blqinst": "false",
         "url": spec["url"], "name": pkg_id,
         "checksum": spec["md5"], "filesize": str(spec["size"])}, sid=sid)
     task_id = started.get("taskid")
     if not isinstance(task_id, str) or not re.fullmatch(r"@SYNOPKG_DOWNLOAD_[A-Za-z0-9_-]+", task_id):
-        raise RuntimeError("Tâche de téléchargement non reconnue : installation arrêtée.")
-    finished = False
-    for i in range(90):
-        state = client.request("SYNO.Core.Package.Installation", 1, "status",
+        raise RuntimeError("Tâche de téléchargement non reconnue : arrêt.")
+    for i in range(120):
+        state = client.request("SYNO.Core.Package.Installation", installation_version, "status",
                                {"task_id": task_id}, sid=sid)
         if state.get("finished") is True:
-            finished = True
+            if state.get("success") is False or state.get("has_fail") is True:
+                raise RuntimeError("Téléchargement du paquet en échec.")
             break
         if i % 10 == 0:
-            pct = state.get("progress")
-            log(f"{pkg_id} : récupération en cours, progression DSM={pct}.")
+            log(f"{pkg_id} : téléchargement DSM, progression : {state.get('progress')}.")
         sleep(2)
-    if not finished:
-        raise RuntimeError(pkg_id + " : délai de téléchargement dépassé. Vérifier Centre de paquets.")
-    info = client.request("SYNO.Core.Package.Installation.Download", 1, "check",
-                          {"taskid": task_id}, sid=sid)
-    if info.get("id") != pkg_id or info.get("maintainer") not in ("Synology Inc.", "Synology Inc", "Synology"):
-        raise RuntimeError("Paquet téléchargé non conforme à la fiche officielle.")
-    source = str(info.get("filename") or "")
-    if not source.startswith("/volume") or "/@tmp/synopkg/" not in source:
-        raise RuntimeError("Chemin du paquet téléchargé inattendu.")
-    checks = client.request("SYNO.Core.Package.Installation", 1, "check", {
-        "id": pkg_id, "install_type": "", "install_on_cold_storage": "false",
-        "blCheckDep": "true"}, sid=sid)
-    if checks.get("is_occupied"):
-        raise RuntimeError("Centre de paquets occupé ; installation reportée.")
-    volumes = checks.get("volume_list") or []
-    if not isinstance(volumes, list) or not any(
-            v.get("mount_point") == "/volume1" for v in volumes if isinstance(v, dict)):
-        raise RuntimeError("Volume 1 indisponible dans l'assistant d'installation.")
-    result = client.request("SYNO.Core.Package.Installation", 1, "install", {
-        "type": "0", "volume_path": "/volume1", "path": source,
-        "check_codesign": "true", "force": "false",
-        "installrunpackage": "true", "extra_values": "{}"}, sid=sid)
-    if result.get("has_fail") is True:
-        raise RuntimeError("DSM signale un échec d'installation pour " + pkg_id)
-    log(pkg_id + " : installation demandée à DSM avec vérification de signature.")
+    else:
+        raise RuntimeError(pkg_id + " : téléchargement non terminé (4 min).")
+    downloaded = client.request("SYNO.Core.Package.Installation.Download",
+                                 download_version, "check", {"taskid": task_id}, sid=sid)
+    if downloaded.get("id") != pkg_id:
+        raise RuntimeError("Le paquet reçu ne correspond pas à la demande.")
+    if str(downloaded.get("maintainer", "")).strip().lower() not in (
+            "synology inc.", "synology inc", "synology"):
+        raise RuntimeError("Éditeur du paquet téléchargé non confirmé.")
+    source = str(downloaded.get("filename") or "")
+    if not (source.startswith("/volume1/@tmp/synopkg/") and
+            re.fullmatch(r"/volume1/@tmp/synopkg/[A-Za-z0-9_.@/-]+", source)
+            and ".." not in source.split("/")):
+        raise RuntimeError("Chemin de paquet DSM non approuvé.")
+    compound = [
+        {"api": "SYNO.Core.Package.Installation", "method": "check",
+         "version": installation_version, "id": pkg_id, "install_type": "",
+         "install_on_cold_storage": False, "breakpkgs": None,
+         "blCheckDep": True, "replacepkgs": None},
+        {"api": "SYNO.Core.Package.Installation", "method": "install",
+         "version": installation_version, "type": 0, "volume_path": "/volume1",
+         "path": source, "check_codesign": True, "force": False,
+         "installrunpackage": True, "extra_values": "{}"},
+    ]
+    log(pkg_id + " : installation signée demandée au NAS (sans forcer).")
+    result = client.request("SYNO.Entry.Request", compound_version, "request",
+                            {"compound": json.dumps(compound), "mode": "sequential",
+                             "stop_when_error": "true"}, sid=sid)
+    package_install_response_ok(result)
+    log(pkg_id + " : DSM a accepté les deux étapes d'installation.")
     return True
+
+
+def media_index_status(client, sid):
+    """Contrôle en lecture seule ; n'utilise pas une API d'écriture inconnue."""
+    details = client.request("SYNO.API.Info", 1, "query",
+        {"query": "SYNO.Core.MediaIndexing.IndexFolder"}, path="query.cgi")
+    api = details.get("SYNO.Core.MediaIndexing.IndexFolder")
+    if not isinstance(api, dict) or api.get("path") != "entry.cgi":
+        return "unknown", "API d'indexation indisponible"
+    version = int(api.get("maxVersion", 0))
+    if not 1 <= version <= 20:
+        return "unknown", "Version d'indexation incompatible"
+    result = client.request("SYNO.Core.MediaIndexing.IndexFolder", version,
+                            "get", sid=sid)
+    # Les firmwares exposent des structures différentes ; ne rien inventer.
+    folders = next((result.get(key) for key in
+                    ("folders", "indexed_folders", "list", "items")
+                    if isinstance(result.get(key), list)), None)
+    if folders is None:
+        return "unknown", "Réponse d'indexation DSM non reconnue"
+    found = set()
+    for item in folders:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or item.get("folder_path") or "").rstrip("/")
+        kind = str(item.get("type") or item.get("media_type") or "").lower()
+        types = item.get("types") or item.get("media_types") or []
+        kinds = {kind}
+        if isinstance(types, list):
+            kinds.update(str(t).lower() for t in types)
+        if "video" in kinds or "2" in kinds or item.get("video") is True:
+            found.add(path)
+    wanted = {"/volume1/Media/Films", "/volume1/Media/Series"}
+    if wanted.issubset(found):
+        return "ready", "Les deux dossiers vidéo sont indexés."
+    return "missing", "Indexation vidéo absente : " + ", ".join(sorted(wanted - found))
 
 
 def downloadstation_info_api(client):
@@ -970,6 +1036,14 @@ class Application:
                             try:
                                 spec = verified_synology_package(catalog.get(pkg), pkg)
                                 install_verified_synology_package(client, core_sid, spec, self.log)
+                                # Une acceptation de commande ne prouve pas que l'installation est terminée.
+                                current_packages = client.request("SYNO.Core.Package", 2, "list", sid=core_sid)
+                                current_ids = installed_package_ids(current_packages.get("packages"))
+                                if pkg in current_ids:
+                                    self.log(pkg + " : présence confirmée après installation.")
+                                else:
+                                    self.log(pkg + " : installation lancée, état final non encore confirmé.")
+                                    unresolved.append("Contrôler l'état de " + pkg + " dans DSM")
                             except Exception as error:
                                 self.log(pkg + " : installation automatisée non confirmée : " + str(error))
                                 unresolved.append("Installer " + pkg + " depuis Centre de paquets DSM")
@@ -990,8 +1064,14 @@ class Application:
                     self.log("Configuration Download Station indisponible : " + str(error))
                     unresolved.append("Vérifier le paquet et la destination Download Station dans DSM")
 
-                self.log("Pour les vidéos DLNA, indexer /Media/Films et /Media/Series en type Vidéo dans DSM.")
-                unresolved.append("Activer l'indexation vidéo des dossiers Films et Series dans DSM")
+                try:
+                    state, explanation = media_index_status(client, core_sid)
+                    self.log("Indexation multimédia : " + explanation)
+                    if state != "ready":
+                        unresolved.append("Vérifier l'indexation Vidéo des dossiers Films et Series dans DSM")
+                except Exception as error:
+                    self.log("Lecture de l'indexation DSM impossible : " + str(error))
+                    unresolved.append("Contrôler l'indexation vidéo dans DSM")
                 self.log("Pour le téléphone PC éteint : utiliser Download Station depuis DSM via Tailscale/QuickConnect.")
                 self.log("=== Résultat : configuration automatique terminée ===")
             finally:
