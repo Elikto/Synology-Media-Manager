@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.3.0 : audit DSM et préparation guidée des dossiers multimédias.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.3.1 : correctifs de mise à jour de l'exécutable, audit DSM et préparation guidée des dossiers multimédias.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -49,7 +49,11 @@ Cliquer sur **Vérifier les mises à jour**. Le programme :
 
 L'application génère un script de remplacement **local**, lancé automatiquement après confirmation : il n'y a **aucune commande à copier-coller**. Le fichier doit rester nommé `SynologyMediaManager.exe` pour permettre les mises à jour.
 
-En cas de souci, conserver l'ancienne version (`.backup`) et consulter `%LOCALAPPDATA%\SynologyMediaManager\update_error.txt`. Les fichiers exécutables restent hébergés sur GitHub Releases.
+**Version 0.3.1 :** les mises à jour fonctionnent aussi si le navigateur a renommé l'EXE en `SynologyMediaManager (1).exe`. Le nouvel outil attend la fermeture du processus, vérifie le fichier téléchargé, effectue un remplacement avec sauvegarde et enregistre le résultat.
+
+**Si le bouton d'une ancienne version (0.2.0 ou 0.3.0) échoue**, télécharger une seule fois l'EXE corrigé avec le bouton en haut de cette page, fermer l'ancien et exécuter le fichier téléchargé. Les versions suivantes devraient ensuite être récupérées par le bouton intégré ; cela reste à confirmer sur le PC réel.
+
+En cas de souci, conserver l'ancienne version (`.backup`) et consulter `%LOCALAPPDATA%\SynologyMediaManager\update_error.txt` ; la dernière ligne de ce journal est aussi affichée dans l'interface à la prochaine ouverture. Les fichiers exécutables restent hébergés sur GitHub Releases.
 
 La somme SHA-256 protège contre la corruption ou la substitution entre l'exécutable et le manifeste ; **elle ne remplace pas une signature de code indépendante**, car les deux fichiers sont publiés sur le même compte GitHub.
 
