@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.3.1 : correctifs de mise à jour de l'exécutable, audit DSM et préparation guidée des dossiers multimédias.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.4.0 : diagnostic DSM, bibliothèque multimédia et gestion de Download Station depuis Windows.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,22 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Installer les paquets et gérer les téléchargements (v0.4.0)
+
+1. Mettre à jour l'application avec le bouton **Vérifier les mises à jour**.
+2. Cliquer sur **Centre de paquets DSM**. Dans le Centre de paquets, installer **Download Station**, puis **Media Server** s'ils sont proposés comme compatibles avec le **DS218j**.
+3. Dans DSM, configurer **Download Station** avec un dossier de téléchargement accessible au compte DSM. L'application utilise systématiquement la destination `Media/Telechargements` pour ses nouvelles tâches.
+4. Dans DSM > **Panneau de configuration > Service d'indexation**, ajouter les dossiers `Media/Films` et `Media/Series` en catégorie vidéo pour Media Server/DLNA.
+5. Dans l'application, utiliser **Tâches Download Station** pour afficher les 50 premières tâches, ou **Ajouter un téléchargement** pour créer une tâche depuis un lien HTTP/HTTPS ou magnet accepté par Download Station.
+
+**Aucune installation de paquet n'est effectuée automatiquement :** le Centre de paquets est l'interface officielle qui contrôle la compatibilité des applications avec l'architecture et la version de DSM. L'ajout d'une tâche exige une confirmation explicite, vérifie la présence du volume et du dossier cible, et ne déplace ni ne supprime de fichier.
+
+Pour programmer un téléchargement depuis un téléphone lorsque le PC est éteint, accéder à **DSM / Download Station** depuis le navigateur mobile via une connexion autorisée (QuickConnect ou Tailscale déjà configuré). **La recherche et le suivi automatisés de nouveaux épisodes façon Sonarr ne sont pas encore intégrés**. Le client Windows ne fournit pas encore d'interface web mobile dédiée.
+
+### Compatibilité
+
+Le DS218j n'a que 512 Mo de RAM, donc ne pas multiplier les applications lourdes ou exiger un transcodage vidéo. Pour la lecture : Kodi sur box Android TV, VLC sur PC/Android et Infuse/VLC sur iPhone en accédant au NAS par SMB sécurisé. Le DLNA est limité au réseau local et doit indexer les dossiers.
 
 ## Mises à jour directement dans l'application
 
@@ -65,6 +81,8 @@ La somme SHA-256 protège contre la corruption ou la substitution entre l'exécu
 - Export de diagnostic réduit, sans secrets d'authentification ni numéros de série.
 - Détection d'Ollama local et analyse facultative avec `qwen2.5-coder:7b` sans accès DSM accordé à Qwen.
 - Journal horodaté et mise à jour intégrée.
+- Liste des téléchargements Download Station et ajout de tâche avec confirmation explicite vers Media/Telechargements.
+- Assistant pour installer les paquets officiels depuis le Centre de paquets DSM.
 - Création guidée des sous-dossiers Films, Series et Telechargements dans un partage Media déjà créé, après confirmation, sans suppression.
 
 ## Sécurité et confidentialité
@@ -77,7 +95,7 @@ La somme SHA-256 protège contre la corruption ou la substitution entre l'exécu
 
 ## Feuille de route
 
-- Installation/configuration de Download Station et Media Server, selon compatibilité du DS218j.
+- Vérification et installation guidée de Download Station et Media Server dans DSM, selon la compatibilité réelle.
 - Gestion et visualisation des médias sur TV, PC, Android et iPhone.
 
 ## Pour les développeurs
