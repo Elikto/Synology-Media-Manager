@@ -1,5 +1,5 @@
 {
-  "version": "0.6.1",
-  "sha256": "6dd6f1c23f36307deabf6be52f3f89997b6c66a2f0e98b8bf6bfcc78f2e41425",
-  "notes": "Bouton Effacer le journal : vide seulement l'affichage des opérations, sans toucher au NAS ni aux rapports sauvegardés."
+  "version": "0.6.2",
+  "sha256": "1559d0b17d4173d2ffd9848416133e383aa456065a7ba527c8b833e93a9fbb58",
+  "notes": "Ouvrir bibliothèque via SMB, accès direct aux vidéos sans indexation DLNA, moins d'alertes manuelles et vérification des dossiers vidéo parents."
 }
