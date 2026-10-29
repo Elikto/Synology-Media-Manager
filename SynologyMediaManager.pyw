@@ -456,6 +456,14 @@ class Application:
                   "Surveiller le disque 1 (ancien compteur UNC=129).",
                   foreground="#8b5b15", wraplength=860).pack(anchor="w", pady=(8, 0))
         self.log("Version " + VERSION + " prête. Les paramètres locaux ne seront jamais publiés sur GitHub.")
+        old_update_log = CONFIG_DIR / "update_error.txt"
+        if old_update_log.is_file():
+            try:
+                rows = old_update_log.read_text(encoding="utf-8-sig").splitlines()
+                if rows:
+                    self.log("Dernière mise à jour : " + rows[-1][-350:])
+            except OSError:
+                pass
         self.root.after(100, self.poll)
 
     def log(self, value):
