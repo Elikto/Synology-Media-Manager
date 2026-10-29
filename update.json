@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0",
-  "sha256": "f697352340f52bf0710077044dfdb076095d529aafbd8dc86e2f08b140658b3b",
-  "notes": "Tableau de bord NAS : état SHR et disque UNC, nombre d'éléments multimédias, tâches Download Station avec progression, suivi automatique toutes les 60 secondes après connexion."
+  "version": "0.8.0",
+  "sha256": "dfb8fd227b233684beca84ea9493b0e34b94abc40814ce21907516526c00e0cf",
+  "notes": "Intégrations Kodi, Plex, Sonarr, Radarr et Prowlarr : vérification des services locaux, liaisons Prowlarr idempotentes et actualisation des bibliothèques déjà configurées."
 }
