@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -811,6 +811,10 @@ class Application:
         ttk.Label(outer, textvariable=self.status).pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
         self.progress.pack(fill="x", pady=(4, 8))
+        journal_row = ttk.Frame(outer)
+        journal_row.pack(fill="x", pady=(0, 5))
+        ttk.Label(journal_row, text="Journal des opérations").pack(side="left")
+        ttk.Button(journal_row, text="Effacer le journal", command=self.clear_log).pack(side="right")
         self.logarea = tk.Text(outer, font=("Consolas", 10), wrap="word", height=23)
         self.logarea.pack(fill="both", expand=True)
         self.logarea.configure(state="disabled")
@@ -832,6 +836,12 @@ class Application:
     def log(self, value):
         self.events.put(("log", str(value)))
 
+    def clear_log(self):
+        # Traite l'effacement dans l'ordre des événements : même si un audit
+        # tourne, les anciens messages disparaissent avant les nouveaux.
+        # Aucun appel réseau ni effacement de fichier n'est effectué.
+        self.events.put(("clear_log", None))
+
     def poll(self):
         try:
             while True:
@@ -840,6 +850,10 @@ class Application:
                     self.logarea.configure(state="normal")
                     self.logarea.insert("end", f"[{datetime.datetime.now():%H:%M:%S}] {value}\n")
                     self.logarea.see("end")
+                    self.logarea.configure(state="disabled")
+                elif kind == "clear_log":
+                    self.logarea.configure(state="normal")
+                    self.logarea.delete("1.0", "end")
                     self.logarea.configure(state="disabled")
                 elif kind == "busy":
                     self.busy = value
