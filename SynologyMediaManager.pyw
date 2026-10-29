@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -17,12 +18,12 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -204,6 +205,79 @@ def check_media_share(shares):
     return True
 
 
+
+def validated_download_uri(value):
+    """Autorise une seule demande explicite, exclut les destinations locales courantes."""
+    uri = str(value).strip()
+    if not uri or len(uri) > 2048 or any(ch in uri for ch in ("\r", "\n", "\x00", ",")):
+        raise ValueError("Lien manquant, multiple ou invalide.")
+    if uri.lower().startswith("magnet:?"):
+        parsed = urllib.parse.urlsplit(uri)
+        if parsed.scheme.lower() != "magnet":
+            raise ValueError("Lien magnet invalide.")
+        values = urllib.parse.parse_qs(parsed.query, max_num_fields=24)
+        hashes = values.get("xt") or []
+        if not any(x.lower().startswith(("urn:btih:", "urn:btmh:")) for x in hashes):
+            raise ValueError("Magnet sans empreinte torrent valide.")
+        return uri
+    parsed = urllib.parse.urlsplit(uri)
+    if parsed.scheme.lower() not in ("https", "http") or not parsed.hostname:
+        raise ValueError("Lien HTTPS, HTTP ou magnet requis.")
+    if parsed.username or parsed.password:
+        raise ValueError("Ne fournis pas de lien avec identifiants intégrés.")
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost" or hostname.endswith((".local", ".internal")):
+        raise ValueError("Les liens locaux ne sont pas autorisés.")
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        if "." not in hostname:
+            raise ValueError("Domaine public requis.")
+    else:
+        if not ip.is_global:
+            raise ValueError("Les adresses IP privées ou locales ne sont pas autorisées.")
+    return uri
+
+
+def downloadstation_endpoint(api_info):
+    if not isinstance(api_info, dict):
+        raise RuntimeError("Download Station non disponible : installe-le depuis DSM.")
+    entry = api_info.get("SYNO.DownloadStation.Task")
+    if not isinstance(entry, dict):
+        raise RuntimeError("API Download Station absente. Installer le paquet dans Centre de paquets.")
+    path = str(entry.get("path", ""))
+    if path not in ("entry.cgi", "DownloadStation/task.cgi"):
+        raise RuntimeError("Chemin Download Station inconnu : opération annulée.")
+    min_version = int(entry.get("minVersion", 1))
+    max_version = int(entry.get("maxVersion", 0))
+    if not min_version <= 1 <= max_version:
+        raise RuntimeError("Version d'API Download Station non prise en charge.")
+    return path
+
+
+def downloadstation_tasks(client, sid):
+    metadata = client.request("SYNO.API.Info", 1, "query",
+        {"query": "SYNO.DownloadStation.Task"}, path="query.cgi")
+    api_path = downloadstation_endpoint(metadata)
+    result = client.request("SYNO.DownloadStation.Task", 1, "list",
+        {"offset": "0", "limit": "50", "additional": "detail,transfer"},
+        sid=sid, path=api_path)
+    tasks = result.get("tasks")
+    if not isinstance(tasks, list):
+        raise RuntimeError("Liste des téléchargements invalide.")
+    return tasks, int(result.get("total", len(tasks)))
+
+
+def create_downloadstation_task(client, sid, uri):
+    verified = validated_download_uri(uri)
+    metadata = client.request("SYNO.API.Info", 1, "query",
+        {"query": "SYNO.DownloadStation.Task"}, path="query.cgi")
+    api_path = downloadstation_endpoint(metadata)
+    return client.request("SYNO.DownloadStation.Task", 1, "create",
+        {"uri": verified, "destination": "Media/Telechargements"},
+        sid=sid, path=api_path)
+
+
 def redact_report(data):
     """Résumé sans identifiants, numéros de série, SID ou détails du réseau."""
     disks = data.get("disks", [])
@@ -244,7 +318,9 @@ class DsmClient:
         if not self.host or "/" in self.host or "://" in self.host:
             raise RuntimeError("Indique uniquement le nom ou l'adresse IP du NAS.")
 
-    def request(self, api, version, method, params=None, sid=None):
+    def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+        if path not in ("entry.cgi", "query.cgi", "DownloadStation/task.cgi"):
+            raise RuntimeError("Chemin API DSM non autorisé.")
         values = {"api": api, "version": str(version), "method": method}
         values.update(params or {})
         if sid:
@@ -258,7 +334,7 @@ class DsmClient:
             actual = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest().upper()
             if actual != self.pin:
                 raise RuntimeError("CERTIFICAT MODIFIÉ : connexion interrompue (empreinte différente).")
-            conn.request("POST", "/webapi/entry.cgi", payload, {
+            conn.request("POST", "/webapi/" + path, payload, {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
             })
@@ -275,7 +351,7 @@ class DsmClient:
             conn.close()
 
     def login(self, username, password, session="Core"):
-        if session not in ("Core", "FileStation"):
+        if session not in ("Core", "FileStation", "DownloadStation"):
             raise ValueError("Session DSM non autorisée.")
         data = self.request("SYNO.API.Auth", 6, "login", {
             "account": username, "passwd": password, "session": session, "format": "sid",
@@ -410,7 +486,7 @@ class Application:
         self.port = tk.StringVar(value=str(self.cfg["port"]))
         self.username = tk.StringVar()
         self.password = tk.StringVar()
-        self.status = tk.StringVar(value="Prêt — lecture seule")
+        self.status = tk.StringVar(value="Prêt — modifications uniquement après confirmation")
         outer = ttk.Frame(root, padding=14)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="SYNOLOGY MEDIA MANAGER", font=("Segoe UI", 17, "bold")).pack(anchor="w")
@@ -444,16 +520,23 @@ class Application:
         media_row.pack(fill="x", pady=(0, 11))
         ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
         ttk.Button(media_row, text="Ouvrir DSM", command=self.open_dsm).pack(side="left", padx=3)
-        ttk.Label(media_row, text="Après création du partage « Media » dans DSM.",
+        ttk.Label(media_row, text="Bibliothèque sur volume1.",
                   foreground="#526577").pack(side="left", padx=9)
+        download_row = ttk.Frame(outer)
+        download_row.pack(fill="x", pady=(0, 10))
+        ttk.Button(download_row, text="Centre de paquets DSM", command=self.open_packages).pack(side="left", padx=(0, 7))
+        ttk.Button(download_row, text="Tâches Download Station", command=self.download_tasks).pack(side="left", padx=3)
+        ttk.Button(download_row, text="Ajouter un téléchargement", command=self.add_download).pack(side="left", padx=3)
+        ttk.Label(download_row, text="Installation des paquets depuis DSM.",
+                  foreground="#526577").pack(side="left", padx=8)
         ttk.Label(outer, textvariable=self.status).pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
         self.progress.pack(fill="x", pady=(4, 8))
         self.logarea = tk.Text(outer, font=("Consolas", 10), wrap="word", height=23)
         self.logarea.pack(fill="both", expand=True)
         self.logarea.configure(state="disabled")
-        ttk.Label(outer, text="Lecture seule : aucune installation, suppression, création de volume ni modification RAID. "
-                  "Surveiller le disque 1 (ancien compteur UNC=129).",
+        ttk.Label(outer, text="Lecture seule par défaut ; création de dossiers et nouvelles tâches uniquement sur confirmation. "
+                  "Aucune installation automatique ni modification RAID. Disque 1 : UNC à surveiller.",
                   foreground="#8b5b15", wraplength=860).pack(anchor="w", pady=(8, 0))
         self.log("Version " + VERSION + " prête. Les paramètres locaux ne seront jamais publiés sur GitHub.")
         old_update_log = CONFIG_DIR / "update_error.txt"
@@ -503,6 +586,13 @@ class Application:
                         "Dossier partagé > Créer, sur volume1.\n\n"
                         "Ouvrir DSM maintenant ?"):
                         self.open_dsm()
+                elif kind == "packages_help":
+                    messagebox.showinfo("Paquets Synology",
+                        "Installe Download Station et Media Server dans le Centre de paquets DSM.\n"
+                        "Choisis seulement les paquets proposés comme compatibles avec ton NAS.\n"
+                        "Dans Media Server, indexe ensuite /Media/Films et /Media/Series.\n"
+                        "Aucun paquet n'a été installé par cet outil.")
+                    self.open_dsm()
                 elif kind == "restart":
                     self.root.after(400, self.root.destroy)
         except queue.Empty:
@@ -615,6 +705,103 @@ class Application:
                 if sid:
                     client.logout(sid)
 
+        self.background(work)
+
+    def open_packages(self):
+        messagebox.showinfo("Centre de paquets",
+            "Dans DSM > Centre de paquets > Tous les paquets, recherche :\n\n"
+            "1. Download Station (téléchargements sur le NAS)\n"
+            "2. Media Server (DLNA pour la télévision)\n\n"
+            "Clique sur Installer pour chacun, seulement s'ils sont proposés comme compatibles.\n"
+            "Ensuite, configure dans DSM l'indexation multimédia de Media/Films et Media/Series.\n"
+            "Cette application n'installe pas de paquets en ton nom.")
+        self.open_dsm()
+
+    def download_tasks(self):
+        user, password = self.username.get().strip(), self.password.get()
+        if not user or not password:
+            messagebox.showwarning("DSM", "Renseigne les identifiants DSM pour consulter Download Station.")
+            return
+        def work():
+            host, port = self.settings()
+            client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
+            sid = None
+            try:
+                sid = client.login(user, password, session="DownloadStation")
+                tasks, total = downloadstation_tasks(client, sid)
+                self.log(f"Download Station : {total} tâche(s), {len(tasks)} affichée(s).")
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    title = str(task.get("title") or "Sans titre")
+                    status = str(task.get("status") or "inconnu")
+                    size = task.get("size", 0)
+                    try:
+                        total_mb = round(int(size) / 1048576, 1)
+                        extra = f" ({total_mb} Mio)"
+                    except (ValueError, TypeError):
+                        extra = ""
+                    self.log(f"  • {title[:110]} — {status}{extra}")
+                if total > len(tasks):
+                    self.log("Affichage limité aux 50 premières tâches.")
+            finally:
+                if sid:
+                    client.logout(sid, session="DownloadStation")
+        self.background(work)
+
+    def add_download(self):
+        uri = simpledialog.askstring("Nouvelle tâche",
+            "Colle un lien HTTPS/HTTP direct ou magnet autorisé.\n"
+            "Destination : Media/Telechargements sur le NAS.\n"
+            "Un seul lien par demande.", parent=self.root)
+        if uri is None:
+            return
+        try:
+            uri = validated_download_uri(uri)
+        except ValueError as exc:
+            messagebox.showerror("Lien refusé", str(exc))
+            return
+        parsed = urllib.parse.urlsplit(uri)
+        origin = "magnet (torrent)" if parsed.scheme == "magnet" else (parsed.hostname or "hôte inconnu")
+        if not messagebox.askyesno("Autoriser le téléchargement",
+            "Lancer cette tâche Download Station sur TON NAS ?\n\n"
+            "Source : " + origin + "\n"
+            "Destination : Media/Telechargements\n\n"
+            "N'ajoute que des contenus que tu es autorisé à télécharger.\n"
+            "Aucune tâche ne sera créée sans cette confirmation."):
+            return
+        user, password = self.username.get().strip(), self.password.get()
+        if not user or not password:
+            messagebox.showwarning("DSM", "Renseigne les identifiants DSM.")
+            return
+        def work():
+            host, port = self.settings()
+            client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
+            core_sid = None
+            dl_sid = None
+            fs_sid = None
+            try:
+                core_sid = client.login(user, password)
+                storage = client.request("SYNO.Storage.CGI.Storage", 1, "load_info", sid=core_sid)
+                check_media_storage(storage)
+                shares = client.request("SYNO.Core.Share", 1, "list", sid=core_sid).get("shares")
+                if not check_media_share(shares):
+                    raise RuntimeError("Le partage Media sur volume1 est absent.")
+                fs_sid = client.login(user, password, session="FileStation")
+                files = file_station_entries(client, fs_sid)
+                if "Telechargements" in missing_media_folders(files):
+                    raise RuntimeError("Le dossier Media/Telechargements n'existe pas.")
+                dl_sid = client.login(user, password, session="DownloadStation")
+                create_downloadstation_task(client, dl_sid, uri)
+                self.log("Nouvelle tâche acceptée par Download Station, destination : Media/Telechargements.")
+                self.log("Pour voir sa progression, clique sur Tâches Download Station.")
+            finally:
+                if dl_sid:
+                    client.logout(dl_sid, session="DownloadStation")
+                if fs_sid:
+                    client.logout(fs_sid, session="FileStation")
+                if core_sid:
+                    client.logout(core_sid)
         self.background(work)
 
     def audit(self):
