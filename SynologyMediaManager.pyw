@@ -21,10 +21,13 @@ from tkinter import ttk, messagebox, filedialog
 import urllib.parse
 import urllib.request
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
+EXE_NAME = "SynologyMediaManager.exe"
+RELEASES_API = "https://api.github.com/repos/" + REPOSITORY + "/releases/latest"
+RELEASES_URL = "https://github.com/" + REPOSITORY + "/releases/download/"
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "SynologyMediaManager"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 LEGACY_FILE = Path.home() / ".synology_agent_local" / "config.json"
@@ -70,6 +73,53 @@ def check_manifest(data):
     if not re.fullmatch("[0-9a-f]{64}", digest):
         raise ValueError("Empreinte SHA-256 de mise à jour incorrecte.")
     return version, digest
+
+
+
+def release_version(data):
+    if not isinstance(data, dict) or data.get("draft") or data.get("prerelease"):
+        raise ValueError("Réponse GitHub Releases invalide.")
+    tag = str(data.get("tag_name", ""))
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        raise ValueError("Version de release invalide.")
+    assets = {str(a.get("name")) for a in data.get("assets", []) if isinstance(a, dict)}
+    if EXE_NAME not in assets or "SHA256SUMS.txt" not in assets:
+        raise ValueError("La dernière version ne contient pas encore tous les fichiers Windows.")
+    return tag[1:]
+
+
+def release_checksum(text):
+    for line in text.splitlines():
+        match = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?SynologyMediaManager\.exe", line.strip())
+        if match:
+            return match.group(1).lower()
+    raise ValueError("Empreinte SHA-256 de l'exécutable introuvable.")
+
+
+def fetch_release_file(version, filename, maximum, sink=None):
+    """Télécharge depuis une release versionnée ; calcule le SHA-256 à la volée."""
+    version_tuple(version)
+    if filename not in (EXE_NAME, "SHA256SUMS.txt"):
+        raise ValueError("Nom de fichier de release non autorisé.")
+    url = RELEASES_URL + "v" + version + "/" + filename
+    request = urllib.request.Request(url, headers={"User-Agent": "SynologyMediaManager/" + VERSION})
+    data = bytearray()
+    digest = hashlib.sha256()
+    size = 0
+    with urllib.request.urlopen(request, timeout=60) as response:
+        with open(sink, "wb") if sink else tempfile.TemporaryFile() as target:
+            while True:
+                chunk = response.read(1_048_576)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > maximum:
+                    raise RuntimeError("Fichier téléchargé trop volumineux.")
+                target.write(chunk)
+                digest.update(chunk)
+                if sink is None:
+                    data.extend(chunk)
+    return digest.hexdigest(), bytes(data), size
 
 
 def redact_report(data):
@@ -191,6 +241,33 @@ try:
 except Exception:
     pass
 sys.exit(1)
+"""
+
+
+
+# Mise à jour EXE : fichier PowerShell LOCAL, généré par l'application,
+# utilisé uniquement pour remplacer le programme APRÈS sa fermeture.
+EXE_UPDATER = r"""
+param(
+    [Parameter(Mandatory=$true)][string]$Target,
+    [Parameter(Mandatory=$true)][string]$Staged,
+    [Parameter(Mandatory=$true)][string]$LogPath
+)
+$ErrorActionPreference = 'Stop'
+for ($i=0; $i -lt 120; $i++) {
+    try {
+        if (-not (Test-Path -LiteralPath $Staged)) { throw 'Mise à jour introuvable' }
+        Copy-Item -LiteralPath $Target -Destination ($Target + '.backup') -Force
+        Move-Item -LiteralPath $Staged -Destination $Target -Force
+        Start-Process -FilePath $Target -WorkingDirectory (Split-Path $Target -Parent)
+        exit 0
+    } catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+"Échec du remplacement du programme. Ancienne version conservée." |
+    Set-Content -LiteralPath $LogPath -Encoding UTF8
+exit 1
 """
 
 
@@ -416,40 +493,83 @@ class Application:
 
     def check_updates(self):
         def work():
-            req = urllib.request.Request(RAW_BASE + "update.json",
-                     headers={"User-Agent": "SynologyMediaManager/" + VERSION})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                raw = r.read(10000)
-            version, digest = check_manifest(json.loads(raw.decode("utf-8")))
-            if version_tuple(version) <= version_tuple(VERSION):
-                self.log("Application à jour : " + VERSION)
-                return
-            self.events.put(("update", (version, digest)))
+            if getattr(sys, "frozen", False):
+                request = urllib.request.Request(RELEASES_API,
+                    headers={"User-Agent": "SynologyMediaManager/" + VERSION,
+                             "Accept": "application/vnd.github+json"})
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    release = json.load(response)
+                version = release_version(release)
+                if version_tuple(version) <= version_tuple(VERSION):
+                    self.log("Application EXE à jour : " + VERSION)
+                    return
+                self.events.put(("update", (version, "exe")))
+            else:
+                req = urllib.request.Request(RAW_BASE + "update.json",
+                        headers={"User-Agent": "SynologyMediaManager/" + VERSION})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    raw = response.read(10000)
+                version, digest = check_manifest(json.loads(raw.decode("utf-8")))
+                if version_tuple(version) <= version_tuple(VERSION):
+                    self.log("Application Python à jour : " + VERSION)
+                    return
+                self.events.put(("update", (version, digest)))
         self.background(work)
 
     def offer_update(self, info):
         version, digest = info
+        is_exe = getattr(sys, "frozen", False)
         if not messagebox.askyesno("Mise à jour disponible",
               f"Installer Synology Media Manager {version} depuis GitHub ?\n"
               "L'ancien programme sera sauvegardé avant remplacement."):
             return
+
         def work():
-            target = Path(sys.argv[0]).resolve()
-            if target.name != APP_NAME or not target.is_file() or target.is_symlink():
-                raise RuntimeError("Pour les mises à jour, lance le fichier téléchargé nommé " + APP_NAME)
-            with urllib.request.urlopen(RAW_BASE + APP_NAME, timeout=25) as response:
-                content = response.read(1_000_001)
-            if not content or len(content) > 1_000_000 or sha256(content) != digest:
-                raise RuntimeError("Téléchargement invalide : l'empreinte SHA-256 ne correspond pas.")
-            staged = target.with_name(target.name + ".next")
-            staged.write_bytes(content)
-            # L'outil auxiliaire attend la fermeture de cette interface pour échanger le fichier.
-            logpath = CONFIG_DIR / "update_error.txt"
-            subprocess.Popen([sys.executable, "-c", UPDATER,
-                              str(target), str(staged), sys.executable, str(logpath)],
-                             cwd=str(target.parent))
-            self.log("Mise à jour validée. Fermeture de l'application avant remplacement…")
-            self.events.put(("restart", None))
+            if is_exe:
+                target = Path(sys.executable).resolve()
+                if target.name.lower() != EXE_NAME.lower() or not target.is_file():
+                    raise RuntimeError("Renomme le programme en " + EXE_NAME + " avant sa mise à jour.")
+                self.log("Lecture de l'empreinte SHA-256 publiée sur GitHub Releases…")
+                _, checksum_data, _ = fetch_release_file(version, "SHA256SUMS.txt", 4096)
+                expected = release_checksum(checksum_data.decode("ascii"))
+                staged = target.with_name(target.name + ".next")
+                try:
+                    self.log("Téléchargement de la nouvelle version EXE…")
+                    actual, _, size = fetch_release_file(version, EXE_NAME, 150_000_000, sink=staged)
+                    if size < 100_000 or actual != expected:
+                        raise RuntimeError("Téléchargement refusé : taille ou SHA-256 incorrect.")
+                    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                    script_file = CONFIG_DIR / "apply_update.ps1"
+                    script_file.write_text(EXE_UPDATER, encoding="utf-8-sig")
+                    log_file = CONFIG_DIR / "update_error.txt"
+                    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                    subprocess.Popen(
+                        ["powershell.exe", "-NoProfile", "-NonInteractive",
+                         "-ExecutionPolicy", "Bypass", "-File", str(script_file),
+                         "-Target", str(target), "-Staged", str(staged),
+                         "-LogPath", str(log_file)],
+                        cwd=str(CONFIG_DIR), creationflags=flags)
+                    self.log("Exécutable vérifié. Fermeture pour mise à jour automatique.")
+                    self.events.put(("restart", None))
+                except Exception:
+                    staged.unlink(missing_ok=True)
+                    raise
+            else:
+                target = Path(sys.argv[0]).resolve()
+                if target.name != APP_NAME or not target.is_file() or target.is_symlink():
+                    raise RuntimeError("Lance le fichier nommé " + APP_NAME)
+                with urllib.request.urlopen(RAW_BASE + APP_NAME, timeout=25) as response:
+                    content = response.read(1_000_001)
+                if not content or len(content) > 1_000_000 or sha256(content) != digest:
+                    raise RuntimeError("Téléchargement invalide : l'empreinte SHA-256 ne correspond pas.")
+                staged = target.with_name(target.name + ".next")
+                staged.write_bytes(content)
+                logpath = CONFIG_DIR / "update_error.txt"
+                subprocess.Popen([sys.executable, "-c", UPDATER,
+                                  str(target), str(staged), sys.executable, str(logpath)],
+                                 cwd=str(target.parent))
+                self.log("Mise à jour validée. Fermeture de l'application avant remplacement…")
+                self.events.put(("restart", None))
         self.background(work)
 
 
