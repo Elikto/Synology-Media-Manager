@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -294,6 +294,167 @@ def create_downloadstation_task(client, sid, uri):
         sid=sid, path=api_path)
 
 
+
+AUTOMATION_PACKAGES = ("DownloadStation", "MediaServer")
+DOWNLOAD_DESTINATION = "Media/Telechargements"
+TRUSTED_SYNOLOGY_HOSTS = ("synology.com", "synologydownload.com", "synologydownload.cn")
+
+
+def installed_package_ids(packages):
+    if not isinstance(packages, list):
+        raise RuntimeError("Liste des paquets DSM invalide.")
+    return {str(p.get("id") or p.get("package_id") or "") for p in packages
+            if isinstance(p, dict)}
+
+
+def verified_synology_package(item, expected_id):
+    """Allow-list stricte : aucune URL fournie par l'utilisateur, pas de miroir tiers."""
+    if expected_id not in AUTOMATION_PACKAGES:
+        raise ValueError("Paquet non autorisé.")
+    if not isinstance(item, dict) or item.get("id") != expected_id:
+        raise ValueError("Fiche du paquet introuvable ou incorrecte.")
+    if str(item.get("maintainer", "")).strip().lower() not in (
+            "synology inc.", "synology inc", "synology"):
+        raise RuntimeError("L'éditeur du paquet n'est pas confirmé comme Synology.")
+    deps = item.get("deppkgs") or []
+    if deps:
+        raise RuntimeError("Dépendances à confirmer dans le Centre de paquets DSM.")
+    address = str(item.get("link", ""))
+    parsed = urllib.parse.urlsplit(address)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (parsed.scheme != "https" or parsed.username or parsed.password or
+            not host or not any(host == domain or host.endswith("." + domain)
+                                for domain in TRUSTED_SYNOLOGY_HOSTS)):
+        raise RuntimeError("Source de paquet non approuvée, installation annulée.")
+    md5 = str(item.get("md5", "")).lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", md5):
+        raise RuntimeError("Checksum du paquet manquant ou invalide.")
+    try:
+        size = int(item.get("size"))
+    except (TypeError, ValueError):
+        raise RuntimeError("Taille du paquet manquante.")
+    if not 50000 <= size <= 250_000_000:
+        raise RuntimeError("Taille de paquet inattendue.")
+    return {"id": expected_id, "url": address, "md5": md5, "size": size}
+
+
+def package_api_info(client):
+    names = "SYNO.Core.Package.Server,SYNO.Core.Package.Installation,SYNO.Core.Package.Installation.Download"
+    result = client.request("SYNO.API.Info", 1, "query",
+                            {"query": names}, path="query.cgi")
+    if not isinstance(result, dict):
+        raise RuntimeError("Découverte des API de paquets impossible.")
+    for name in names.split(","):
+        details = result.get(name)
+        if not isinstance(details, dict) or details.get("path") != "entry.cgi":
+            raise RuntimeError("API DSM incompatible : " + name)
+        if int(details.get("minVersion", 99)) > 1 or int(details.get("maxVersion", 0)) < 1:
+            raise RuntimeError("Version d'API DSM non prise en charge : " + name)
+    return result
+
+
+def official_installable_packages(client):
+    package_api_info(client)
+    result = client.request("SYNO.Core.Package.Server", 1, "list",
+        {"blforcereload": "false", "blloadothers": "false"})
+    packages = result.get("packages")
+    if not isinstance(packages, list):
+        raise RuntimeError("Aucun catalogue de paquets compatible renvoyé par DSM.")
+    return {p.get("id"): p for p in packages if isinstance(p, dict)}
+
+
+def install_verified_synology_package(client, sid, spec, log, sleep=None):
+    """Une installation signée et non forcée. Aucun effacement, upgrade ou uninstall."""
+    if sleep is None:
+        import time
+        sleep = time.sleep
+    pkg_id = spec["id"]
+    if pkg_id not in AUTOMATION_PACKAGES:
+        raise ValueError("Paquet non autorisé.")
+    log(f"{pkg_id} : téléchargement officiel demandé à DSM.")
+    started = client.request("SYNO.Core.Package.Installation", 1, "install", {
+        "operation": "install", "type": "0", "blqinst": "false",
+        "url": spec["url"], "name": pkg_id,
+        "checksum": spec["md5"], "filesize": str(spec["size"])}, sid=sid)
+    task_id = started.get("taskid")
+    if not isinstance(task_id, str) or not re.fullmatch(r"@SYNOPKG_DOWNLOAD_[A-Za-z0-9_-]+", task_id):
+        raise RuntimeError("Tâche de téléchargement non reconnue : installation arrêtée.")
+    finished = False
+    for i in range(90):
+        state = client.request("SYNO.Core.Package.Installation", 1, "status",
+                               {"task_id": task_id}, sid=sid)
+        if state.get("finished") is True:
+            finished = True
+            break
+        if i % 10 == 0:
+            pct = state.get("progress")
+            log(f"{pkg_id} : récupération en cours, progression DSM={pct}.")
+        sleep(2)
+    if not finished:
+        raise RuntimeError(pkg_id + " : délai de téléchargement dépassé. Vérifier Centre de paquets.")
+    info = client.request("SYNO.Core.Package.Installation.Download", 1, "check",
+                          {"taskid": task_id}, sid=sid)
+    if info.get("id") != pkg_id or info.get("maintainer") not in ("Synology Inc.", "Synology Inc", "Synology"):
+        raise RuntimeError("Paquet téléchargé non conforme à la fiche officielle.")
+    source = str(info.get("filename") or "")
+    if not source.startswith("/volume") or "/@tmp/synopkg/" not in source:
+        raise RuntimeError("Chemin du paquet téléchargé inattendu.")
+    checks = client.request("SYNO.Core.Package.Installation", 1, "check", {
+        "id": pkg_id, "install_type": "", "install_on_cold_storage": "false",
+        "blCheckDep": "true"}, sid=sid)
+    if checks.get("is_occupied"):
+        raise RuntimeError("Centre de paquets occupé ; installation reportée.")
+    volumes = checks.get("volume_list") or []
+    if not isinstance(volumes, list) or not any(
+            v.get("mount_point") == "/volume1" for v in volumes if isinstance(v, dict)):
+        raise RuntimeError("Volume 1 indisponible dans l'assistant d'installation.")
+    result = client.request("SYNO.Core.Package.Installation", 1, "install", {
+        "type": "0", "volume_path": "/volume1", "path": source,
+        "check_codesign": "true", "force": "false",
+        "installrunpackage": "true", "extra_values": "{}"}, sid=sid)
+    if result.get("has_fail") is True:
+        raise RuntimeError("DSM signale un échec d'installation pour " + pkg_id)
+    log(pkg_id + " : installation demandée à DSM avec vérification de signature.")
+    return True
+
+
+def downloadstation_info_api(client):
+    result = client.request("SYNO.API.Info", 1, "query",
+                            {"query": "SYNO.DownloadStation.Info"}, path="query.cgi")
+    info = result.get("SYNO.DownloadStation.Info")
+    if not isinstance(info, dict):
+        raise RuntimeError("API Download Station Info introuvable.")
+    if info.get("path") not in ("entry.cgi", "DownloadStation/info.cgi"):
+        raise RuntimeError("Chemin Info non autorisé.")
+    version = int(info.get("maxVersion", 0))
+    return info.get("path"), version
+
+
+def configure_default_download_destination(client, sid, log):
+    """Vérifie d'abord la configuration ; ne change que la destination demandée."""
+    api_path, api_version = downloadstation_info_api(client)
+    if api_version < 1:
+        raise RuntimeError("API de configuration Download Station indisponible.")
+    config = client.request("SYNO.DownloadStation.Info", 1, "getconfig",
+                            sid=sid, path=api_path)
+    current = str(config.get("default_destination", "")).strip("/")
+    if current == DOWNLOAD_DESTINATION:
+        log("Download Station : dossier de destination déjà correct.")
+        return "unchanged"
+    if api_version < 2:
+        log("Download Station : réglage automatique du dossier non pris en charge par cette version.")
+        return "manual"
+    client.request("SYNO.DownloadStation.Info", 2, "setserverconfig",
+                   {"default_destination": DOWNLOAD_DESTINATION},
+                   sid=sid, path=api_path)
+    new_config = client.request("SYNO.DownloadStation.Info", 1, "getconfig",
+                                sid=sid, path=api_path)
+    if str(new_config.get("default_destination", "")).strip("/") != DOWNLOAD_DESTINATION:
+        raise RuntimeError("Le dossier Download Station n'a pas été confirmé après modification.")
+    log("Download Station : destination par défaut configurée.")
+    return "configured"
+
+
 def redact_report(data):
     """Résumé sans identifiants, numéros de série, SID ou détails du réseau."""
     disks = data.get("disks", [])
@@ -335,7 +496,7 @@ class DsmClient:
             raise RuntimeError("Indique uniquement le nom ou l'adresse IP du NAS.")
 
     def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
-        if path not in ("entry.cgi", "query.cgi", "DownloadStation/task.cgi"):
+        if path not in ("entry.cgi", "query.cgi", "DownloadStation/task.cgi", "DownloadStation/info.cgi"):
             raise RuntimeError("Chemin API DSM non autorisé.")
         values = {"api": api, "version": str(version), "method": method}
         values.update(params or {})
@@ -491,7 +652,7 @@ class Application:
     def __init__(self, root):
         self.root = root
         root.title("Synology Media Manager " + VERSION)
-        root.geometry("920x720")
+        root.geometry("1120x750")
         self.events = queue.Queue()
         self.busy = False
         self.latest = None
@@ -533,6 +694,7 @@ class Application:
         ttk.Button(row, text="Analyse Qwen", command=self.analyze_qwen).pack(side="left", padx=3)
         ttk.Button(row, text="Exporter rapport", command=self.export).pack(side="left", padx=3)
         ttk.Button(row, text="Vérifier les mises à jour", command=self.check_updates).pack(side="left", padx=3)
+        ttk.Button(row, text="Configurer automatiquement", command=self.auto_setup).pack(side="left", padx=3)
         media_row = ttk.Frame(outer)
         media_row.pack(fill="x", pady=(0, 11))
         ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
@@ -623,6 +785,12 @@ class Application:
                         "Dans Media Server, indexe ensuite /Media/Films et /Media/Series.\n"
                         "Aucun paquet n'a été installé par cet outil.")
                     self.open_dsm()
+                elif kind == "setup_remaining":
+                    lines = "\n".join("• " + item for item in value)
+                    if messagebox.askyesno("Configuration : dernières étapes",
+                        "Les étapes non automatisables sur ce DSM sont :\n\n" + lines +
+                        "\n\nOuvrir DSM maintenant ?"):
+                        self.open_dsm()
                 elif kind == "restart":
                     self.root.after(400, self.root.destroy)
         except queue.Empty:
@@ -735,6 +903,109 @@ class Application:
                 if sid:
                     client.logout(sid)
 
+        self.background(work)
+
+    def auto_setup(self):
+        """Un clic et une approbation pour les étapes supportées par DSM."""
+        details = (
+            "Configurer automatiquement ce serveur Synology ?\n\n"
+            "Le programme va :\n"
+            "• contrôler l'état du SHR, du volume et du partage Media ;\n"
+            "• vérifier ou créer les trois sous-dossiers manquants ;\n"
+            "• tenter l'installation de Download Station et Media Server "
+            "UNIQUEMENT depuis le catalogue officiel compatible de DSM, "
+            "en exigeant la signature Synology et sans forcer l'installation ;\n"
+            "• configurer le dossier par défaut de Download Station si l'API le permet ;\n"
+            "• afficher les étapes restantes pour le DLNA et l'accès mobile.\n\n"
+            "Aucune donnée n'est supprimée, le SHR et les volumes ne sont pas modifiés.\n"
+            "Le disque 1 reste à surveiller (UNC=129) : sauvegarde recommandée.\n\n"
+            "Autorises-tu ces changements ?")
+        if not messagebox.askyesno("Configuration NAS en un clic", details):
+            return
+        user, password = self.username.get().strip(), self.password.get()
+        if not user or not password:
+            messagebox.showwarning("Connexion NAS", "Renseigne d'abord tes identifiants DSM dans l'application.")
+            return
+
+        def work():
+            host, port = self.settings()
+            client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
+            core_sid = None
+            fs_sid = None
+            dl_sid = None
+            unresolved = []
+            try:
+                core_sid = client.login(user, password)
+                self.log("=== Configuration automatique : contrôle de sécurité ===")
+                storage = client.request("SYNO.Storage.CGI.Storage", 1, "load_info", sid=core_sid)
+                check_media_storage(storage)
+                self.log("Stockage vérifié : groupe SHR normal et volume disponible.")
+                shares = client.request("SYNO.Core.Share", 1, "list", sid=core_sid).get("shares")
+                if not check_media_share(shares):
+                    self.log("Partage Media absent : créer le dossier partagé Media sur volume1 dans DSM.")
+                    unresolved.append("Créer le partage Media sur volume1 dans DSM")
+                    return
+                fs_sid = client.login(user, password, session="FileStation")
+                missing = missing_media_folders(file_station_entries(client, fs_sid))
+                for name in missing:
+                    create_media_subfolder(client, fs_sid, name)
+                    self.log("Dossier créé : /Media/" + name)
+                if not missing:
+                    self.log("Bibliothèque Media : trois dossiers déjà présents, aucune écriture.")
+
+                package_data = client.request("SYNO.Core.Package", 2, "list", sid=core_sid)
+                installed = installed_package_ids(package_data.get("packages"))
+                # Les listes DSM peuvent omettre les identifiants et retourner les noms.
+                installed_names = {str(p.get("name") or "").lower()
+                                   for p in package_data.get("packages", []) if isinstance(p, dict)}
+                missing_packages = [p for p in AUTOMATION_PACKAGES
+                    if p not in installed and
+                    not (p == "DownloadStation" and "download station" in installed_names) and
+                    not (p == "MediaServer" and "media server" in installed_names)]
+                if missing_packages:
+                    self.log("Paquets manquants : " + ", ".join(missing_packages))
+                    try:
+                        catalog = official_installable_packages(client)
+                        for pkg in missing_packages:
+                            try:
+                                spec = verified_synology_package(catalog.get(pkg), pkg)
+                                install_verified_synology_package(client, core_sid, spec, self.log)
+                            except Exception as error:
+                                self.log(pkg + " : installation automatisée non confirmée : " + str(error))
+                                unresolved.append("Installer " + pkg + " depuis Centre de paquets DSM")
+                    except Exception as error:
+                        self.log("Catalogue/installation DSM indisponible : " + str(error))
+                        unresolved.extend("Installer " + name + " depuis Centre de paquets DSM"
+                                          for name in missing_packages)
+                else:
+                    self.log("Download Station et Media Server : paquets détectés.")
+
+                # DSM peut avoir installé Download Station pendant la phase précédente.
+                try:
+                    dl_sid = client.login(user, password, session="DownloadStation")
+                    mode = configure_default_download_destination(client, dl_sid, self.log)
+                    if mode == "manual":
+                        unresolved.append("Choisir Media/Telechargements dans les paramètres Download Station")
+                except Exception as error:
+                    self.log("Configuration Download Station indisponible : " + str(error))
+                    unresolved.append("Vérifier le paquet et la destination Download Station dans DSM")
+
+                self.log("Pour les vidéos DLNA, indexer /Media/Films et /Media/Series en type Vidéo dans DSM.")
+                unresolved.append("Activer l'indexation vidéo des dossiers Films et Series dans DSM")
+                self.log("Pour le téléphone PC éteint : utiliser Download Station depuis DSM via Tailscale/QuickConnect.")
+                self.log("=== Résultat : configuration automatique terminée ===")
+            finally:
+                if dl_sid:
+                    client.logout(dl_sid, session="DownloadStation")
+                if fs_sid:
+                    client.logout(fs_sid, session="FileStation")
+                if core_sid:
+                    client.logout(core_sid)
+                if unresolved:
+                    # Aucune installation réussie n'est supposée sans vérification.
+                    self.log("Actions DSM restantes : " + "; ".join(dict.fromkeys(unresolved)))
+                    self.events.put(("setup_remaining", list(dict.fromkeys(unresolved))))
+                self.log("Aucune suppression ni modification RAID effectuée.")
         self.background(work)
 
     def open_packages(self):
