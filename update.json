@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
-  "sha256": "7525cd06cd3dfa7425f41e8bd0d030cd3f2c46637f51578feb7980959c1d7fb6",
-  "notes": "Création guidée et sécurisée des sous-dossiers multimédias après création du partage Media dans DSM."
+  "version": "0.3.1",
+  "sha256": "40110d9d07772c402903613d209b73d17a84263d468d5e2e50b810b06dcfc9b7",
+  "notes": "Correctif mise à jour Windows EXE : noms renommés, remplacement après fermeture, journal de mise à jour."
 }
