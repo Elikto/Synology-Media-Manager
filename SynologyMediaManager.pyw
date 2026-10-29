@@ -274,18 +274,20 @@ class DsmClient:
         finally:
             conn.close()
 
-    def login(self, username, password):
+    def login(self, username, password, session="Core"):
+        if session not in ("Core", "FileStation"):
+            raise ValueError("Session DSM non autorisée.")
         data = self.request("SYNO.API.Auth", 6, "login", {
-            "account": username, "passwd": password, "session": "Core", "format": "sid",
+            "account": username, "passwd": password, "session": session, "format": "sid",
         })
         sid = data.get("sid")
         if not sid:
             raise RuntimeError("Session absente (authentification supplémentaire possible).")
         return sid
 
-    def logout(self, sid):
+    def logout(self, sid, session="Core"):
         try:
-            self.request("SYNO.API.Auth", 6, "logout", {"session": "Core"}, sid=sid)
+            self.request("SYNO.API.Auth", 6, "logout", {"session": session}, sid=sid)
         except Exception:
             pass
 
@@ -534,6 +536,7 @@ class Application:
             host, port = self.settings()
             client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
             sid = None
+            fs_sid = None
             try:
                 sid = client.login(user, password)
                 self.log("Préparation multimédia : relecture du SHR (aucune modification)…")
@@ -546,17 +549,21 @@ class Application:
                              "il doit être créé depuis DSM une seule fois.")
                     self.events.put(("media_missing", None))
                     return
-                files = file_station_entries(client, sid)
+                fs_sid = client.login(user, password, session="FileStation")
+                self.log("Session File Station créée ; liste des dossiers en lecture seule…")
+                files = file_station_entries(client, fs_sid)
                 missing = missing_media_folders(files)
                 if not missing:
                     self.log("Tous les dossiers multimédias existent déjà. Aucune écriture.")
                     return
                 self.log("Création limitée aux dossiers absents : " + ", ".join(missing))
                 for name in missing:
-                    create_media_subfolder(client, sid, name)
+                    create_media_subfolder(client, fs_sid, name)
                     self.log("Dossier créé : /Media/" + name)
                 self.log("Préparation terminée. Aucun fichier supprimé ou déplacé.")
             finally:
+                if fs_sid:
+                    client.logout(fs_sid, session="FileStation")
                 if sid:
                     client.logout(sid)
 
