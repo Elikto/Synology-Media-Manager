@@ -122,6 +122,55 @@ class TestManager(unittest.TestCase):
             self.assertEqual(Path(str(target) + ".backup").read_bytes(), b"old-release")
             self.assertIn("Replacement successful", log.read_text(encoding="utf-8-sig"))
 
+    def test_download_uri_validation(self):
+        f = APP["validated_download_uri"]
+        self.assertEqual(f("https://example.org/video.mp4"), "https://example.org/video.mp4")
+        self.assertTrue(f("magnet:?xt=urn:btih:0123456789abcdef").startswith("magnet:"))
+        for bad in [
+            "file:///etc/passwd", "ftp://example.org/a", "http://localhost/file",
+            "http://192.168.1.100/file", "http://127.0.0.1/file",
+            "http://10.1.1.1/file", "http://[::1]/", "https://user:pass@example.org/file",
+            "http://nas.local/download", "https://example.org/foo,https://example.org/bar",
+            "https://example.org/\nmore", "magnet:?dn=missinghash",
+        ]:
+            with self.subTest(uri=bad), self.assertRaises(ValueError):
+                f(bad)
+
+    def test_downloadstation_endpoint_allowlist(self):
+        endpoint = APP["downloadstation_endpoint"]
+        self.assertEqual(endpoint({
+            "SYNO.DownloadStation.Task": {"path": "DownloadStation/task.cgi",
+                                           "minVersion": 1, "maxVersion": 2}
+        }), "DownloadStation/task.cgi")
+        for bad in [
+            {}, {"SYNO.DownloadStation.Task": {"path": "../../evil", "maxVersion": 1}},
+            {"SYNO.DownloadStation.Task": {"path": "entry.cgi", "minVersion": 2, "maxVersion": 2}}
+        ]:
+            with self.subTest(value=bad), self.assertRaises(RuntimeError):
+                endpoint(bad)
+
+    def test_downloadstation_methods_do_not_delete(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+            def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+                self.calls.append((api, version, method, params, sid, path))
+                if api == "SYNO.API.Info":
+                    return {"SYNO.DownloadStation.Task":
+                        {"path": "DownloadStation/task.cgi", "minVersion": 1, "maxVersion": 1}}
+                if method == "list":
+                    return {"total": 1, "tasks": [{"title": "Sample", "status": "waiting"}]}
+                return {"task_id": "example"}
+        client = FakeClient()
+        tasks, total = APP["downloadstation_tasks"](client, "test_session")
+        self.assertEqual((len(tasks), total), (1, 1))
+        APP["create_downloadstation_task"](client, "test_session", "https://example.org/file.mp4")
+        write = client.calls[-1]
+        self.assertEqual(write[:3], ("SYNO.DownloadStation.Task", 1, "create"))
+        self.assertEqual(write[3]["destination"], "Media/Telechargements")
+        self.assertEqual(write[5], "DownloadStation/task.cgi")
+        self.assertNotIn("delete", [call[2] for call in client.calls])
+
     def test_sha256(self):
         self.assertEqual(APP["sha256"](b"abc"),
                          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
