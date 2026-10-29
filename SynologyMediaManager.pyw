@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -335,23 +335,59 @@ EXE_UPDATER = r"""
 param(
     [Parameter(Mandatory=$true)][string]$Target,
     [Parameter(Mandatory=$true)][string]$Staged,
-    [Parameter(Mandatory=$true)][string]$LogPath
+    [Parameter(Mandatory=$true)][string]$LogPath,
+    [int]$ParentPid = 0,
+    [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
-for ($i=0; $i -lt 120; $i++) {
+function Write-UpdateLog([string]$Message) {
     try {
-        if (-not (Test-Path -LiteralPath $Staged)) { throw 'Mise à jour introuvable' }
-        Copy-Item -LiteralPath $Target -Destination ($Target + '.backup') -Force
-        Move-Item -LiteralPath $Staged -Destination $Target -Force
-        Start-Process -FilePath $Target -WorkingDirectory (Split-Path $Target -Parent)
-        exit 0
-    } catch {
-        Start-Sleep -Milliseconds 500
-    }
+        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "[$stamp] $Message"
+    } catch { }
 }
-"Échec du remplacement du programme. Ancienne version conservée." |
-    Set-Content -LiteralPath $LogPath -Encoding UTF8
-exit 1
+try {
+    $directory = Split-Path -Path $LogPath -Parent
+    if (-not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    Write-UpdateLog 'Updater started'
+    if ($ParentPid -gt 0) {
+        try { Wait-Process -Id $ParentPid -Timeout 90 -ErrorAction SilentlyContinue }
+        catch { Write-UpdateLog 'Parent process wait timed out' }
+    }
+    if (-not (Test-Path -LiteralPath $Staged -PathType Leaf)) {
+        throw 'Staged executable is missing'
+    }
+    $backup = $Target + '.backup'
+    $lastError = 'Unknown replacement error'
+    $installed = $false
+    for ($i = 0; $i -lt 120; $i++) {
+        try {
+            if (Test-Path -LiteralPath $Target) {
+                # Keep an original backup and atomically replace the old EXE.
+                [System.IO.File]::Replace($Staged, $Target, $backup, $true)
+            } else {
+                [System.IO.File]::Move($Staged, $Target)
+            }
+            $installed = $true
+            break
+        } catch {
+            $lastError = $_.Exception.Message
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $installed) { throw "Update could not replace target: $lastError" }
+    Write-UpdateLog 'Replacement successful'
+    if (-not $NoLaunch) {
+        Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Path $Target -Parent)
+        Write-UpdateLog 'New executable launched'
+    }
+    exit 0
+} catch {
+    Write-UpdateLog ("FAILURE: " + $_.Exception.Message)
+    exit 1
+}
 """
 
 
@@ -686,29 +722,40 @@ class Application:
         def work():
             if is_exe:
                 target = Path(sys.executable).resolve()
-                if target.name.lower() != EXE_NAME.lower() or not target.is_file():
-                    raise RuntimeError("Renomme le programme en " + EXE_NAME + " avant sa mise à jour.")
-                self.log("Lecture de l'empreinte SHA-256 publiée sur GitHub Releases…")
+                if target.suffix.lower() != ".exe" or not target.is_file():
+                    raise RuntimeError("L'application lancée n'est pas un exécutable Windows valide.")
+                self.log("Lecture du SHA-256 de la release GitHub…")
                 _, checksum_data, _ = fetch_release_file(version, "SHA256SUMS.txt", 4096)
                 expected = release_checksum(checksum_data.decode("ascii"))
-                staged = target.with_name(target.name + ".next")
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                # Write stage in writable LocalAppData, even if EXE lives in Downloads.
+                staged = CONFIG_DIR / "SynologyMediaManager.update.exe"
                 try:
-                    self.log("Téléchargement de la nouvelle version EXE…")
+                    self.log("Téléchargement EXE " + version + "…")
                     actual, _, size = fetch_release_file(version, EXE_NAME, 150_000_000, sink=staged)
                     if size < 100_000 or actual != expected:
                         raise RuntimeError("Téléchargement refusé : taille ou SHA-256 incorrect.")
-                    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                    self.log(f"SHA-256 vérifié ({size} octets).")
                     script_file = CONFIG_DIR / "apply_update.ps1"
                     script_file.write_text(EXE_UPDATER, encoding="utf-8-sig")
                     log_file = CONFIG_DIR / "update_error.txt"
+                    log_file.unlink(missing_ok=True)
                     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                    subprocess.Popen(
+                    env = os.environ.copy()
+                    # A fresh PyInstaller onefile instance must not inherit stale extraction state.
+                    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+                    for key in list(env):
+                        if key.startswith("_PYI_"):
+                            del env[key]
+                    proc = subprocess.Popen(
                         ["powershell.exe", "-NoProfile", "-NonInteractive",
                          "-ExecutionPolicy", "Bypass", "-File", str(script_file),
                          "-Target", str(target), "-Staged", str(staged),
-                         "-LogPath", str(log_file)],
-                        cwd=str(CONFIG_DIR), creationflags=flags)
-                    self.log("Exécutable vérifié. Fermeture pour mise à jour automatique.")
+                         "-LogPath", str(log_file), "-ParentPid", str(os.getpid())],
+                        cwd=str(CONFIG_DIR), creationflags=flags, env=env)
+                    self.log("Remplacement lancé (PID " + str(proc.pid) + ").")
+                    self.log("Journal local : " + str(log_file))
+                    self.log("Fermeture de l'application pour finaliser la mise à jour…")
                     self.events.put(("restart", None))
                 except Exception:
                     staged.unlink(missing_ok=True)
