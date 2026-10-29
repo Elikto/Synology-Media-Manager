@@ -199,12 +199,41 @@ class TestManager(unittest.TestCase):
         with self.assertRaises(ValueError):
             verifier(valid, "PlexMediaServer")
 
+    def test_package_api_version_discovery(self):
+        class Fake:
+            def request(self, api, version, method, params=None, path="entry.cgi", **kw):
+                self.assert_not_called = False
+                return {name: {"path": "entry.cgi", "minVersion": 2,
+                               "maxVersion": 3} for name in (
+                    "SYNO.Core.Package.Server", "SYNO.Core.Package.Installation",
+                    "SYNO.Core.Package.Installation.Download", "SYNO.Entry.Request")}
+        api = APP["package_api_info"](Fake())
+        self.assertEqual(api["SYNO.Core.Package.Server"]["minVersion"], 2)
+
+    def test_compound_installation_refuses_partial_failure(self):
+        validate = APP["package_install_response_ok"]
+        self.assertTrue(validate({"has_fail": False,
+            "result": [{"success": True}, {"success": True}]}))
+        for response in [
+            {}, {"has_fail": True, "result": [{"success": True}, {"success": False}]},
+            {"has_fail": False, "result": [{"success": True}, {"success": False}]},
+            {"has_fail": False, "result": [{"success": True}]},
+        ]:
+            with self.subTest(response=response), self.assertRaises(RuntimeError):
+                validate(response)
+
     def test_automated_install_never_forces_or_uninstalls(self):
+        import json
         class FakeDSM:
             def __init__(self):
                 self.calls = []
             def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
                 self.calls.append((api, method, params, sid))
+                if api == "SYNO.API.Info":
+                    return {name: {"path": "entry.cgi", "minVersion": 1,
+                                   "maxVersion": 3} for name in (
+                        "SYNO.Core.Package.Server", "SYNO.Core.Package.Installation",
+                        "SYNO.Core.Package.Installation.Download", "SYNO.Entry.Request")}
                 if method == "install" and params.get("operation") == "install":
                     return {"taskid": "@SYNOPKG_DOWNLOAD_DownloadStation"}
                 if method == "status":
@@ -213,23 +242,48 @@ class TestManager(unittest.TestCase):
                     return {"id": "DownloadStation",
                             "maintainer": "Synology Inc.",
                             "filename": "/volume1/@tmp/synopkg/download.x/DownloadStation"}
-                if method == "check":
-                    return {"volume_list": [{"mount_point": "/volume1"}],
-                            "is_occupied": False}
-                return {}
+                if api == "SYNO.Entry.Request":
+                    return {"has_fail": False,
+                            "result": [{"success": True}, {"success": True}]}
+                raise AssertionError("Unexpected call: " + str((api, method)))
         dsm = FakeDSM()
         spec = {"id": "DownloadStation",
                 "url": "https://global.synologydownload.com/test.spk",
                 "md5": "b" * 32, "size": 100_000}
-        APP["install_verified_synology_package"](dsm, "fake_sid", spec, lambda message: None,
-                                                    sleep=lambda seconds: None)
+        APP["install_verified_synology_package"](dsm, "fake_sid", spec,
+            lambda message: None, sleep=lambda seconds: None)
         methods = [x[1] for x in dsm.calls]
         self.assertNotIn("uninstall", methods)
         self.assertNotIn("delete", methods)
         final = dsm.calls[-1]
-        self.assertEqual(final[2]["check_codesign"], "true")
-        self.assertEqual(final[2]["force"], "false")
-        self.assertEqual(final[2]["volume_path"], "/volume1")
+        self.assertEqual(final[0], "SYNO.Entry.Request")
+        compound = json.loads(final[2]["compound"])
+        self.assertEqual(compound[1]["check_codesign"], True)
+        self.assertEqual(compound[1]["force"], False)
+        self.assertEqual(compound[1]["volume_path"], "/volume1")
+        self.assertEqual(final[2]["stop_when_error"], "true")
+
+    def test_media_indexing_status_read_only(self):
+        class FakeDSM:
+            def __init__(self, folders):
+                self.folders = folders
+                self.methods = []
+            def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+                self.methods.append(method)
+                if api == "SYNO.API.Info":
+                    return {"SYNO.Core.MediaIndexing.IndexFolder":
+                            {"path": "entry.cgi", "maxVersion": 1}}
+                return {"folders": self.folders}
+        files = [
+            {"path": "/volume1/Media/Films", "type": "video"},
+            {"path": "/volume1/Media/Series", "type": "video"},
+        ]
+        client = FakeDSM(files)
+        state, _ = APP["media_index_status"](client, "sid")
+        self.assertEqual(state, "ready")
+        self.assertEqual(client.methods, ["query", "get"])
+        state, _ = APP["media_index_status"](FakeDSM(files[:1]), "sid")
+        self.assertEqual(state, "missing")
 
     def test_download_destination_is_idempotent_and_rechecked(self):
         class FakeDSM:
