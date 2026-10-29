@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.4.0 : diagnostic DSM, bibliothèque multimédia et gestion de Download Station depuis Windows.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.4.1 : correctif du bouton « Vérifier les mises à jour », diagnostic DSM, bibliothèque multimédia et gestion de Download Station.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -52,6 +52,16 @@ Pour programmer un téléchargement depuis un téléphone lorsque le PC est éte
 ### Compatibilité
 
 Le DS218j n'a que 512 Mo de RAM, donc ne pas multiplier les applications lourdes ou exiger un transcodage vidéo. Pour la lecture : Kodi sur box Android TV, VLC sur PC/Android et Infuse/VLC sur iPhone en accédant au NAS par SMB sécurisé. Le DLNA est limité au réseau local et doit indexer les dossiers.
+
+## Correctif important : mise à jour v0.4.1
+
+Dans la version 0.4.0 (et les versions précédentes), la vérification détectait la nouvelle Release **mais ouvrait la boîte de dialogue avant que la tâche de vérification ne soit libérée**. En cliquant sur « Oui », l'application ignorait silencieusement le lancement du téléchargement.
+
+La version **0.4.1** résout le problème : la boîte de dialogue est maintenant présentée **après** la fin de la vérification. Un test de non-régression Windows simule cette chronologie.
+
+**Si tu es encore sur v0.4.0 ou avant**, utilise le bouton de téléchargement en tête de ce README **une seule fois**, puis ferme l'ancienne version et lance le nouveau fichier. Le programme conserve la configuration locale, mais le bouton de mise à jour des anciennes versions ne peut pas s'auto-réparer.
+
+Pour tester le mécanisme corrigé lors de la prochaine version, ouvrir le journal de l'application, cliquer « Vérifier les mises à jour » et confirmer. Le journal doit alors afficher « Téléchargement et installation demandés », puis la vérification SHA-256 et le remplacement.
 
 ## Mises à jour directement dans l'application
 
