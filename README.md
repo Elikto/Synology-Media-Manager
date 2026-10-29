@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.5.0 : bouton « Configurer automatiquement » pour préparer la bibliothèque et tenter l’installation contrôlée des paquets officiels, tout en conservant les diagnostics et la mise à jour intégrée.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.6.0 : configuration automatique renforcée, vérification des installations terminées et détection de l’indexation vidéo, sans configuration répétitive inutile.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,24 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Automatisation renforcée — v0.6.0
+
+**Depuis la version 0.5.0, utiliser « Vérifier les mises à jour » pour recevoir 0.6.0 directement dans l'application.** Aucun terminal, téléchargement séparé ou installation Python.
+
+Le bouton **Configurer automatiquement** reste le point d'entrée unique : il effectue un audit du SHR/volume, constate les dossiers déjà créés (sans les recréer), vérifie les paquets nécessaires, tente leur installation officielle si DSM expose les API compatibles, attend leur apparition réelle dans le Centre de paquets, puis essaie de configurer la destination Download Station et vérifie si l'indexation vidéo existe déjà.
+
+**Améliorations v0.6.0 :**
+- Le programme découvre les versions des API DSM au lieu d'exiger la version 1 pour toutes les fonctions.
+- Installation de paquets via la séquence `SYNO.Entry.Request` de Synology (vérification de signature, installation non forcée, refus si la vérification échoue).
+- Authentification avec jeton DSM quand disponible, sans publier de secrets ni les enregistrer sur GitHub.
+- Attente et contrôle que les paquets apparaissent dans DSM après l'installation, plutôt que de présumer du succès.
+- Interrogation **en lecture seule** des dossiers indexés, pour ne plus demander de reconfigurer l'indexation quand elle est déjà active.
+- Rapport des seules étapes réellement non confirmées ; les demandes de configuration manuelle sont limitées à ces cas.
+
+**Ce que l'outil ne peut pas garantir :** il n'a pas d'accès direct au NAS depuis GitHub ; toute installation nécessite des identifiants DSM et **une autorisation initiale**. Certaines opérations dépendent d'API internes incompatibles entre firmwares DSM. L'indexation DLNA ne sera **pas écrite automatiquement** tant que l'API d'ajout des dossiers et les permissions ne sont pas identifiées de manière sûre ; l'application détecte son état et signale le blocage éventuel. Les tests exécutés sous Windows simulent un DSM ; ils ne valent pas validation sur ton NAS réel.
+
+**Sécurité :** aucune désinstallation, suppression de données, modification RAID, désactivation du pare-feu, exposition directe d'un port SMB ni installation de paquet d'origine inconnue. Le compteur UNC du premier disque justifie de conserver une sauvegarde indépendante.
 
 ## Configuration en un clic : v0.5.0
 
