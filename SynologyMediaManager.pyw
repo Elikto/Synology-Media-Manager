@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -481,6 +481,7 @@ class Application:
         self.latest = None
         self.report = None
         self.pending_fp = None
+        self.pending_update = None
         self.cfg = load_config()
         self.host = tk.StringVar(value=self.cfg["host"])
         self.port = tk.StringVar(value=str(self.cfg["port"]))
@@ -568,6 +569,13 @@ class Application:
                         self.progress.start(10)
                     else:
                         self.progress.stop()
+                        # La vérification vient de se terminer. On peut maintenant
+                        # proposer la mise à jour sans que background() la refuse.
+                        if self.pending_update is not None:
+                            info = self.pending_update
+                            self.pending_update = None
+                            self.root.after_idle(
+                                lambda info=info: self.offer_update(info))
                 elif kind == "report":
                     self.report = value
                 elif kind == "error":
@@ -578,7 +586,11 @@ class Application:
                         "SHA-256 :\n" + ":".join(value[i:i+2] for i in range(0, 64, 2)) +
                         "\n\nCompare cette empreinte avec une source indépendante avant de l'approuver.")
                 elif kind == "update":
-                    self.offer_update(value)
+                    # Le worker est encore marqué "busy" à ce stade.
+                    # Attendre obligatoirement son évènement busy=False.
+                    self.pending_update = value
+                    self.log("Version " + str(value[0]) +
+                             " disponible : préparation de l'installation…")
                 elif kind == "media_missing":
                     if messagebox.askyesno("Partager Media absent",
                         "Le partage « Media » n'existe pas encore.\n\n"
@@ -919,6 +931,7 @@ class Application:
             return
 
         def work():
+            self.log("Téléchargement et installation demandés pour la version " + version + ".")
             if is_exe:
                 target = Path(sys.executable).resolve()
                 if target.suffix.lower() != ".exe" or not target.is_file():
