@@ -362,13 +362,16 @@ try {
     $backup = $Target + '.backup'
     $lastError = 'Unknown replacement error'
     $installed = $false
+    $siblingStage = $Target + '.update'
     for ($i = 0; $i -lt 120; $i++) {
         try {
+            # File.Replace needs files on the same disk.
+            [System.IO.File]::Copy($Staged, $siblingStage, $true)
             if (Test-Path -LiteralPath $Target) {
-                # Keep an original backup and atomically replace the old EXE.
-                [System.IO.File]::Replace($Staged, $Target, $backup, $true)
+                # Atomically back up and replace only the current executable.
+                [System.IO.File]::Replace($siblingStage, $Target, $backup, $true)
             } else {
-                [System.IO.File]::Move($Staged, $Target)
+                [System.IO.File]::Move($siblingStage, $Target)
             }
             $installed = $true
             break
@@ -378,6 +381,7 @@ try {
         }
     }
     if (-not $installed) { throw "Update could not replace target: $lastError" }
+    try { Remove-Item -LiteralPath $Staged -Force -ErrorAction SilentlyContinue } catch { }
     Write-UpdateLog 'Replacement successful'
     if (-not $NoLaunch) {
         Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Path $Target -Parent)
