@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
-  "sha256": "fda8cf6c0f95729b27c97528bd370c9982b79f6a355b30bae2ae43ef05660ec7",
-  "notes": "Automatisation DSM renforcée : installation des paquets signés via séquence Compound, confirmation du résultat, vérification de l'indexation vidéo et jeton de connexion."
+  "version": "0.6.1",
+  "sha256": "6dd6f1c23f36307deabf6be52f3f89997b6c66a2f0e98b8bf6bfcc78f2e41425",
+  "notes": "Bouton Effacer le journal : vide seulement l'affichage des opérations, sans toucher au NAS ni aux rapports sauvegardés."
 }
