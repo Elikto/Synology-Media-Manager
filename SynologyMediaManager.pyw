@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -58,6 +58,22 @@ def store_config(cfg):
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest().lower()
+
+
+def update_log_tail(path, max_lines=20):
+    """Dernières étapes de la mise à jour Windows, sans accéder au NAS."""
+    log_path = Path(path)
+    if not log_path.is_file():
+        return "Aucun journal de mise à jour pour cette installation."
+    try:
+        # Garder une limite de 64 Kio, y compris si le journal a beaucoup grandi.
+        with log_path.open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 65536))
+            content = stream.read().decode("utf-8-sig", errors="replace")
+        return "\n".join(content.splitlines()[-max_lines:]) or "Journal vide."
+    except OSError as error:
+        return "Lecture du journal impossible : " + str(error)
 
 
 def version_tuple(text):
@@ -521,6 +537,7 @@ class Application:
         media_row.pack(fill="x", pady=(0, 11))
         ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
         ttk.Button(media_row, text="Ouvrir DSM", command=self.open_dsm).pack(side="left", padx=3)
+        ttk.Button(media_row, text="Journal MAJ", command=self.show_update_history).pack(side="left", padx=3)
         ttk.Label(media_row, text="Bibliothèque sur volume1.",
                   foreground="#526577").pack(side="left", padx=9)
         download_row = ttk.Frame(outer)
@@ -540,6 +557,7 @@ class Application:
                   "Aucune installation automatique ni modification RAID. Disque 1 : UNC à surveiller.",
                   foreground="#8b5b15", wraplength=860).pack(anchor="w", pady=(8, 0))
         self.log("Version " + VERSION + " prête. Les paramètres locaux ne seront jamais publiés sur GitHub.")
+        self.log("Diagnostic MAJ disponible via le bouton « Journal MAJ ».")
         old_update_log = CONFIG_DIR / "update_error.txt"
         if old_update_log.is_file():
             try:
@@ -896,6 +914,16 @@ class Application:
             self.log("Analyse Qwen (conseil seulement, sans accès DSM) :\n"
                      + str(output.get("response", "Réponse vide")))
         self.background(work)
+
+    def show_update_history(self):
+        """Affiche directement le résultat du remplaçant externe sur Windows."""
+        path = CONFIG_DIR / "update_error.txt"
+        data = update_log_tail(path)
+        if "FAILURE:" in data or "Échec" in data:
+            self.log("Dernière mise à jour : erreur détectée (voir fenêtre).")
+        else:
+            self.log("Journal de mise à jour consulté.")
+        messagebox.showinfo("Journal des mises à jour", data, parent=self.root)
 
     def check_updates(self):
         def work():
