@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
-  "sha256": "a52155fee3d122afee7032387a69aea1c2d410ce7690793b19e50896c50a169e",
-  "notes": "Première version : audit DSM en lecture seule, certificat épinglé, Qwen local et bouton de mise à jour depuis GitHub."
+  "version": "0.2.0",
+  "sha256": "112e4193272da1397a108ef3eb8c82d6dc4a079e6dfdc74606c96a896a17ef37",
+  "notes": "Application Windows EXE autonome, téléchargement en un clic et mise à jour intégrée depuis GitHub Releases."
 }
