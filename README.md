@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.6.0 : configuration automatique renforcée, vérification des installations terminées et détection de l’indexation vidéo, sans configuration répétitive inutile.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.6.1 : nouveau bouton « Effacer le journal » pour vider les messages affichés, sans modifier le NAS, tout en conservant la configuration automatique et la mise à jour intégrée.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,10 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Effacer le journal — v0.6.1
+
+Cliquer sur **Effacer le journal**, au-dessus du journal des opérations, pour vider immédiatement l'affichage. Les nouveaux messages continueront à apparaître normalement, même si une tâche est en cours. Cette action ne supprime aucun fichier, aucun rapport enregistré ni aucun journal de mise à jour ; elle n'accède pas au NAS.
 
 ## Automatisation renforcée — v0.6.0
 
