@@ -353,10 +353,10 @@ def package_api_info(client):
     return result
 
 
-def official_installable_packages(client):
+def official_installable_packages(client, sid):
     package_api_info(client)
     result = client.request("SYNO.Core.Package.Server", 1, "list",
-        {"blforcereload": "false", "blloadothers": "false"})
+        {"blforcereload": "false", "blloadothers": "false"}, sid=sid)
     packages = result.get("packages")
     if not isinstance(packages, list):
         raise RuntimeError("Aucun catalogue de paquets compatible renvoyé par DSM.")
@@ -965,7 +965,7 @@ class Application:
                 if missing_packages:
                     self.log("Paquets manquants : " + ", ".join(missing_packages))
                     try:
-                        catalog = official_installable_packages(client)
+                        catalog = official_installable_packages(client, core_sid)
                         for pkg in missing_packages:
                             try:
                                 spec = verified_synology_package(catalog.get(pkg), pkg)
