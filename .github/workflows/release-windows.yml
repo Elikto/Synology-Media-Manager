@@ -33,6 +33,7 @@ jobs:
           $manifest = Get-Content -Raw update.json | ConvertFrom-Json
           if ($manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version" }
           $actual = (Get-FileHash -LiteralPath SynologyMediaManager.pyw -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Source SHA-256 on Windows: $actual"
           if ($actual -ne $manifest.sha256) { throw "Source checksum mismatch" }
           $expectedVersion = 'VERSION = "' + $manifest.version + '"'
           if (-not (Select-String -LiteralPath SynologyMediaManager.pyw -Pattern $expectedVersion -SimpleMatch -Quiet)) {
