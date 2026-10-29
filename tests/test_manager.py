@@ -1,0 +1,41 @@
+import runpy
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+APP = runpy.run_path(str(ROOT / "SynologyMediaManager.pyw"))
+
+
+class TestManager(unittest.TestCase):
+    def test_version(self):
+        self.assertEqual(APP["version_tuple"]("1.10.3"), (1, 10, 3))
+        with self.assertRaises(ValueError):
+            APP["version_tuple"]("not-a-version")
+
+    def test_update_manifest_validation(self):
+        digest = "a" * 64
+        self.assertEqual(APP["check_manifest"]({"version": "1.2.0", "sha256": digest}),
+                         ("1.2.0", digest))
+        with self.assertRaises(ValueError):
+            APP["check_manifest"]({"version": "1.2.0", "sha256": "none"})
+
+    def test_sanitized_report(self):
+        source = {
+            "disks": [{"name": "Drive 1", "serial": "PRIVATE123", "temp": 23,
+                       "status": "normal", "unc": 129, "smart_status": "normal"}],
+            "storagePools": [{"status": "normal", "device_type": "shr_with_1_disk_protect"}],
+            "volumes": [{"id": "volume_1", "status": "normal", "uuid": "PRIVATE"}],
+            "sid": "SECRET",
+        }
+        output = APP["redact_report"](source)
+        self.assertEqual(output["disks"][0]["unc"], 129)
+        self.assertNotIn("PRIVATE", str(output))
+        self.assertNotIn("SECRET", str(output))
+
+    def test_sha256(self):
+        self.assertEqual(APP["sha256"](b"abc"),
+                         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
+
+if __name__ == "__main__":
+    unittest.main()
