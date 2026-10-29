@@ -448,6 +448,29 @@ def install_verified_synology_package(client, sid, spec, log, sleep=None):
     return True
 
 
+def wait_for_package(client, sid, package_id, log, sleep=None, attempts=20):
+    """Attend la présence réelle du paquet après la commande d'installation."""
+    if package_id not in AUTOMATION_PACKAGES:
+        raise ValueError("Paquet non autorisé.")
+    if sleep is None:
+        import time
+        sleep = time.sleep
+    for n in range(attempts):
+        package_list = client.request("SYNO.Core.Package", 2, "list", sid=sid)
+        packages = package_list.get("packages")
+        names = {str(p.get("name") or "").strip().lower() for p in packages or []
+                 if isinstance(p, dict)}
+        if (package_id in installed_package_ids(packages) or
+                (package_id == "DownloadStation" and "download station" in names) or
+                (package_id == "MediaServer" and "media server" in names)):
+            log(package_id + " : installé (confirmé par DSM).")
+            return True
+        if n + 1 < attempts:
+            sleep(3)
+    log(package_id + " : installation acceptée, toujours en cours ou non visible par DSM.")
+    return False
+
+
 def media_index_status(client, sid):
     """Contrôle en lecture seule ; n'utilise pas une API d'écriture inconnue."""
     details = client.request("SYNO.API.Info", 1, "query",
@@ -556,6 +579,7 @@ class DsmClient:
         self.host = host
         self.port = int(port)
         self.pin = fingerprint.replace(":", "").upper()
+        self.tokens = {}
         if not re.fullmatch("[0-9A-F]{64}", self.pin):
             raise RuntimeError("Empreinte HTTPS manquante : vérifie et approuve le certificat.")
         if not self.host or "/" in self.host or "://" in self.host:
@@ -577,10 +601,13 @@ class DsmClient:
             actual = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest().upper()
             if actual != self.pin:
                 raise RuntimeError("CERTIFICAT MODIFIÉ : connexion interrompue (empreinte différente).")
-            conn.request("POST", "/webapi/" + path, payload, {
+            headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
-            })
+            }
+            if sid and self.tokens.get(sid):
+                headers["X-SYNO-TOKEN"] = self.tokens[sid]
+            conn.request("POST", "/webapi/" + path, payload, headers)
             response = conn.getresponse()
             raw = response.read(4_000_001)
             if len(raw) > 4_000_000 or response.status != 200:
@@ -597,11 +624,15 @@ class DsmClient:
         if session not in ("Core", "FileStation", "DownloadStation"):
             raise ValueError("Session DSM non autorisée.")
         data = self.request("SYNO.API.Auth", 6, "login", {
-            "account": username, "passwd": password, "session": session, "format": "sid",
+            "account": username, "passwd": password, "session": session,
+            "format": "sid", "enable_syno_token": "yes", "client": "browser",
         })
         sid = data.get("sid")
         if not sid:
             raise RuntimeError("Session absente (authentification supplémentaire possible).")
+        token = data.get("synotoken")
+        if isinstance(token, str) and token:
+            self.tokens[sid] = token
         return sid
 
     def logout(self, sid, session="Core"):
@@ -609,6 +640,8 @@ class DsmClient:
             self.request("SYNO.API.Auth", 6, "logout", {"session": session}, sid=sid)
         except Exception:
             pass
+        finally:
+            self.tokens.pop(sid, None)
 
 
 def observed_certificate(host, port):
@@ -1036,14 +1069,9 @@ class Application:
                             try:
                                 spec = verified_synology_package(catalog.get(pkg), pkg)
                                 install_verified_synology_package(client, core_sid, spec, self.log)
-                                # Une acceptation de commande ne prouve pas que l'installation est terminée.
-                                current_packages = client.request("SYNO.Core.Package", 2, "list", sid=core_sid)
-                                current_ids = installed_package_ids(current_packages.get("packages"))
-                                if pkg in current_ids:
-                                    self.log(pkg + " : présence confirmée après installation.")
-                                else:
-                                    self.log(pkg + " : installation lancée, état final non encore confirmé.")
-                                    unresolved.append("Contrôler l'état de " + pkg + " dans DSM")
+                                # Attendre que le paquet apparaisse vraiment dans DSM.
+                                if not wait_for_package(client, core_sid, pkg, self.log):
+                                    unresolved.append("Installation de " + pkg + " non encore confirmée par DSM")
                             except Exception as error:
                                 self.log(pkg + " : installation automatisée non confirmée : " + str(error))
                                 unresolved.append("Installer " + pkg + " depuis Centre de paquets DSM")
