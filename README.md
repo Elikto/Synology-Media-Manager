@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.6.2 : bibliothèque NAS accessible directement en SMB sans indexation DLNA, détection des dossiers vidéo indexés via leur parent et suppression des alertes manuelles inutiles.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.7.0 : tableau de bord en direct avec état du SHR, nombre d'éléments multimédias et progression des téléchargements Download Station.** Lecture seule et actualisation automatique toutes les 60 secondes lorsque le programme Windows est ouvert et que le compte DSM est renseigné. Les autres fonctions de configuration sécurisée sont conservées. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,19 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Suivi automatique du NAS — v0.7.0
+
+Un **tableau de bord** intégré affiche, sans ouvrir DSM ni retaper des commandes :
+- l'état du stockage SHR et une alerte si un compteur UNC de disque est non nul ;
+- le nombre d'éléments directement présents dans `Media/Films`, `Media/Series` et `Media/Telechargements` (sans lecture des contenus des fichiers ni parcours récursif) ;
+- les 30 premiers téléchargements Download Station avec nom, état, taille et pourcentage calculé lorsque la taille téléchargée est disponible.
+
+**Démarrage sans autre action :** après un audit réussi ou la configuration automatique, l'application lance le tableau de bord en lecture seule, puis actualise les informations **toutes les 60 secondes**. Le bouton **Suivi automatique : activé/désactivé** permet de suspendre ou relancer les interrogations. **Actualiser état** effectue une lecture ponctuelle.
+
+Les identifiants DSM sont utilisés en mémoire pendant la session : ils ne sont pas sauvegardés et les journaux ne publient pas d'URL de téléchargement ni de secret. Les API NAS utilisées par le nouveau tableau de bord sont **en lecture seule**. Ce tableau de bord n'installe rien et ne déplace aucun média.
+
+**Limite :** la surveillance de l'interface s'arrête quand le PC ou l'application est éteint ; Download Station, s'il est installé et actif, continue toutefois ses téléchargements directement sur le NAS. Les pourcentages peuvent être indisponibles selon les tâches et la version DSM. Les tests Windows utilisent un NAS simulé : vérifier la compatibilité de l'affichage sur le DS218j réel.
 
 ## Accès multimédia sans étape manuelle d'indexation — v0.6.2
 
