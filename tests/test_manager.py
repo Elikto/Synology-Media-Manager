@@ -402,6 +402,74 @@ class TestManager(unittest.TestCase):
         self.assertEqual(changed.current, "Media/Telechargements")
         self.assertEqual(sum(1 for call in changed.calls if call[1] == "setserverconfig"), 1)
 
+    def test_media_folder_overview_reads_only_expected_folders(self):
+        import json
+        class Fake:
+            def __init__(self):
+                self.calls = []
+            def request(self, api, version, method, params=None, sid=None):
+                self.calls.append((api, version, method, params, sid))
+                path = json.loads(params["folder_path"])
+                counts = {"/Media/Films": 3, "/Media/Series": 2,
+                          "/Media/Telechargements": 5}
+                return {"total": counts[path], "files": []}
+        fake = Fake()
+        result = APP["media_folder_overview"](fake, "test_sid")
+        self.assertEqual(result, {"Films": 3, "Series": 2, "Telechargements": 5})
+        self.assertEqual(len(fake.calls), 3)
+        self.assertTrue(all(call[2] == "list" for call in fake.calls))
+        self.assertTrue(all(call[3]["limit"] == "1" for call in fake.calls))
+
+    def test_media_folder_overview_refuses_ambiguous_total(self):
+        class Fake:
+            def request(self, api, version, method, params=None, sid=None):
+                return {"total": "invalid"}
+        with self.assertRaises(RuntimeError):
+            APP["media_folder_overview"](Fake(), "test_sid")
+
+    def test_download_task_overview_ignores_sensitive_fields(self):
+        tasks = [
+            {"title": "Film\nX", "status": "downloading", "size": 1000,
+             "uri": "https://user:password@example.org/path",
+             "additional": {"transfer": {"size_downloaded": 500}}},
+            {"title": "Série", "status": "finished", "size": 0},
+        ]
+        result = APP["download_task_overview"](tasks, 2)
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["rows"][0][0], "Film X")
+        self.assertEqual(result["rows"][0][2], "50.0%")
+        self.assertEqual(result["rows"][1][2], "—")
+        self.assertNotIn("password", str(result))
+        self.assertEqual(len(result["rows"][0]), 4)
+
+    def test_monitor_tick_single_read_and_reschedule(self):
+        class FakeRoot:
+            def __init__(self):
+                self.callbacks = []
+            def after(self, delay, callback):
+                self.callbacks.append((delay, callback))
+        app = APP["Application"].__new__(APP["Application"])
+        app.root = FakeRoot()
+        app.auto_monitor = True
+        app.monitor_scheduled = True
+        app.monitor_busy = False
+        app.busy = False
+        calls = []
+        app.refresh_dashboard = lambda quiet=False: calls.append(quiet)
+        app.monitor_tick()
+        self.assertEqual(calls, [True])
+        self.assertTrue(app.monitor_scheduled)
+        self.assertEqual(len(app.root.callbacks), 1)
+        self.assertEqual(app.root.callbacks[0][0], 60000)
+        app.busy = True
+        app.root.callbacks[0][1]()
+        self.assertEqual(calls, [True])
+        app.auto_monitor = False
+        self.assertEqual(len(app.root.callbacks), 2)
+        app.root.callbacks[1][1]()
+        self.assertFalse(app.monitor_scheduled)
+        self.assertEqual(len(app.root.callbacks), 2)
+
     def test_download_uri_validation(self):
         f = APP["validated_download_uri"]
         self.assertEqual(f("https://example.org/video.mp4"), "https://example.org/video.mp4")
