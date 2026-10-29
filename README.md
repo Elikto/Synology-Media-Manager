@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.2.0 : audit en lecture seule.** Aucune installation de paquet, création de dossier, modification du stockage ou du RAID n'est effectuée. Le DS218j ne possède que 512 Mo de RAM.
+**Version 0.3.0 : audit DSM et préparation guidée des dossiers multimédias.** L'application ne modifie ni le RAID ni les disques et n'installe aucun paquet. Elle peut créer trois dossiers dans un partage existant, après confirmation. Le DS218j ne possède que 512 Mo de RAM.
 
 ## Installation initiale (une seule fois)
 
@@ -26,6 +26,16 @@ Application Windows de gestion **locale** d'un NAS Synology DSM, développée en
 4. Entrer les identifiants DSM dans l'application et cliquer sur **Auditer DSM**.
 
 Les mots de passe ne sont pas enregistrés.
+
+## Préparer la bibliothèque films et séries (v0.3.0)
+
+1. Dans l'application, cliquer **Auditer DSM** pour vérifier le volume et les disques.
+2. Cliquer **Créer dossiers multimédias** et lire la confirmation. Aucune écriture n'est effectuée sans accord explicite.
+3. Si le partage racine `Media` n'existe pas, l'application **ouvre DSM** : créer **une seule fois** le dossier partagé `Media` dans **Panneau de configuration > Dossier partagé > Créer**, sur **volume1**, et lui donner les permissions appropriées. Les API de création des partages racine sont devenues incompatibles avec certaines versions récentes de DSM ; ce choix évite les commandes SSH et API non fiables.
+4. Revenir dans l'application et cliquer de nouveau **Créer dossiers multimédias** : après relecture de la santé SHR, des permissions et des dossiers existants, l'application crée uniquement les sous-dossiers manquants `/Media/Films`, `/Media/Series` et `/Media/Telechargements` via l'API File Station.
+5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
+
+**Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
 
 ## Mises à jour directement dans l'application
 
@@ -51,6 +61,7 @@ La somme SHA-256 protège contre la corruption ou la substitution entre l'exécu
 - Export de diagnostic réduit, sans secrets d'authentification ni numéros de série.
 - Détection d'Ollama local et analyse facultative avec `qwen2.5-coder:7b` sans accès DSM accordé à Qwen.
 - Journal horodaté et mise à jour intégrée.
+- Création guidée des sous-dossiers Films, Series et Telechargements dans un partage Media déjà créé, après confirmation, sans suppression.
 
 ## Sécurité et confidentialité
 
@@ -62,7 +73,6 @@ La somme SHA-256 protège contre la corruption ou la substitution entre l'exécu
 
 ## Feuille de route
 
-- Création guidée des dossiers partagés après vérifications et autorisation explicite.
 - Installation/configuration de Download Station et Media Server, selon compatibilité du DS218j.
 - Gestion et visualisation des médias sur TV, PC, Android et iPhone.
 
