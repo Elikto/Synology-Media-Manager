@@ -19,11 +19,13 @@ import tempfile
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
+from media_integrations import (SERVICE_PORTS, servarr_version, link_prowlarr,
+                                kodi_scan, plex_scan, local_host)
 import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -876,6 +878,8 @@ class Application:
         ttk.Button(download_row, text="Centre de paquets DSM", command=self.open_packages).pack(side="left", padx=(0, 7))
         ttk.Button(download_row, text="Tâches Download Station", command=self.download_tasks).pack(side="left", padx=3)
         ttk.Button(download_row, text="Ajouter un téléchargement", command=self.add_download).pack(side="left", padx=3)
+        ttk.Button(download_row, text="Intégrer Kodi / Plex / *arr",
+                   command=self.open_integrations).pack(side="left", padx=3)
         ttk.Label(download_row, text="Installation des paquets depuis DSM.",
                   foreground="#526577").pack(side="left", padx=8)
         dashboard = ttk.LabelFrame(outer, text="État du NAS et des téléchargements — lecture seule", padding=8)
@@ -1366,6 +1370,144 @@ class Application:
                     self.log("Actions DSM restantes : " + "; ".join(dict.fromkeys(unresolved)))
                     self.events.put(("setup_remaining", list(dict.fromkeys(unresolved))))
                 self.log("Aucune suppression ni modification RAID effectuée.")
+        self.background(work)
+
+    def open_integrations(self):
+        """Intégrations sur un hôte externe, sans toucher au DS218j."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Intégrations Kodi · Plex · Sonarr · Radarr · Prowlarr")
+        dialog.geometry("830x560")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        area = ttk.Frame(dialog, padding=12)
+        area.pack(fill="both", expand=True)
+        ttk.Label(area, text="Connecter les services multimédias",
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(area, text="Ton DS218j (ARMv7, 512 Mo) conserve les fichiers et Download Station. "
+                  "Sonarr / Prowlarr / Radarr / Plex doivent être hébergés "
+                  "sur un appareil compatible x64 ou ARM64.",
+                  wraplength=780, foreground="#526577").pack(anchor="w", pady=(3, 10))
+        ttk.Label(area, text="Les champs vides sont ignorés. "
+                  "Adresses locales ou Tailscale seulement ; aucun secret n'est sauvegardé.",
+                  wraplength=780).pack(anchor="w", pady=(0, 10))
+        fields = {}
+        header = ttk.Frame(area)
+        header.pack(fill="x")
+        for label, width in (("Service", 14), ("Hôte local / Tailscale", 22),
+                             ("Port", 8), ("Clé API ou jeton", 34)):
+            ttk.Label(header, text=label, width=width).pack(side="left", padx=3)
+        for name in SERVICE_PORTS:
+            row = ttk.Frame(area)
+            row.pack(fill="x", pady=4)
+            ttk.Label(row, text=name, width=14).pack(side="left", padx=3)
+            host = ttk.Entry(row, width=22)
+            host.pack(side="left", padx=3)
+            if name in ("Prowlarr", "Sonarr", "Radarr"):
+                host.insert(0, "127.0.0.1")
+            port = ttk.Entry(row, width=8)
+            port.insert(0, str(SERVICE_PORTS[name]))
+            port.pack(side="left", padx=3)
+            key = ttk.Entry(row, width=34, show="*")
+            key.pack(side="left", padx=3)
+            fields[name] = (host, port, key)
+        kodi_row = ttk.Frame(area)
+        kodi_row.pack(fill="x", pady=(8, 6))
+        ttk.Label(kodi_row, text="Kodi : utilisateur HTTP (facultatif)").pack(side="left")
+        kodi_username = ttk.Entry(kodi_row, width=16)
+        kodi_username.pack(side="left", padx=8)
+        ttk.Label(area, text="Kodi : le champ « Clé » représente le mot de passe HTTP. "
+                  "L'accès distant JSON-RPC doit être autorisé dans Kodi. "
+                  "Plex : le jeton permet de rafraîchir les bibliothèques existantes.",
+                  wraplength=780, foreground="#526577").pack(anchor="w", pady=(0, 12))
+
+        def submit():
+            config = {}
+            for name, (host, port, key) in fields.items():
+                address = host.get().strip()
+                secret = key.get().strip()
+                if not address:
+                    continue
+                try:
+                    local_host(address)
+                    parsed_port = int(port.get().strip())
+                    if not 1 <= parsed_port <= 65535:
+                        raise ValueError("Port invalide")
+                except (ValueError, TypeError) as exc:
+                    messagebox.showerror("Adresse invalide", name + " : " + str(exc),
+                                         parent=dialog)
+                    return
+                config[name] = (address, parsed_port, secret)
+            username = kodi_username.get().strip()
+            if not config:
+                messagebox.showwarning("Services", "Renseigne au moins un hôte.",
+                                       parent=dialog)
+                return
+            if not messagebox.askyesno("Automatisation multimédia",
+                "Tester les services locaux configurés puis, s'ils sont disponibles :\n"
+                "• créer les liaisons Prowlarr ↔ Sonarr/Radarr manquantes ;\n"
+                "• demander le scan des bibliothèques Kodi et Plex existantes.\n\n"
+                "Aucune recherche de contenus, suppression de fichiers, installation de "
+                "paquet ni modification RAID.\n"
+                "Les clés ne sont conservées qu'en mémoire pendant cette opération.\n\n"
+                "Continuer ?", parent=dialog):
+                return
+            dialog.destroy()
+            self.configure_integrations(config, username)
+
+        action = ttk.Frame(area)
+        action.pack(fill="x", pady=8)
+        ttk.Button(action, text="Tester et connecter les services",
+                   command=submit).pack(side="left")
+        ttk.Button(action, text="Annuler",
+                   command=dialog.destroy).pack(side="left", padx=8)
+
+    def configure_integrations(self, config, kodi_username=""):
+        """Déclenché après approbation explicite ; les secrets restent en mémoire."""
+        def work():
+            self.log("=== Intégration multimédia : connexions locales ===")
+            detected = {}
+            for name in ("Prowlarr", "Sonarr", "Radarr"):
+                if name not in config:
+                    continue
+                host, port, secret = config[name]
+                if not secret:
+                    self.log(name + " : clé API absente, connexion ignorée.")
+                    continue
+                try:
+                    api, version = servarr_version(name, host, port, secret)
+                    detected[name] = (host, port, secret)
+                    self.log(name + " : connecté, version " + version +
+                             " (API " + api + ").")
+                except Exception as error:
+                    self.log(name + " : connexion indisponible (" + str(error)[:170] + ").")
+            if "Prowlarr" in detected:
+                targets = {k: detected[k] for k in ("Sonarr", "Radarr") if k in detected}
+                if targets:
+                    try:
+                        prowlarr = detected["Prowlarr"]
+                        results = link_prowlarr(prowlarr[:2], prowlarr[2], targets)
+                        for name, state in results:
+                            self.log("Prowlarr ↔ " + name + " : " + state)
+                    except Exception as error:
+                        self.log("Liaisons Prowlarr non modifiées : " + str(error)[:170])
+                else:
+                    self.log("Prowlarr : aucune application Sonarr/Radarr joignable à relier.")
+            if "Kodi" in config:
+                host, port, password = config["Kodi"]
+                try:
+                    kodi_scan(host, port, kodi_username, password)
+                    self.log("Kodi : actualisation de la vidéothèque demandée.")
+                except Exception as error:
+                    self.log("Kodi : scan non déclenché (" + str(error)[:170] + ").")
+            if "Plex" in config:
+                host, port, token = config["Plex"]
+                try:
+                    count = plex_scan(host, port, token)
+                    self.log("Plex : actualisation demandée pour " +
+                             str(count) + " bibliothèques films/séries.")
+                except Exception as error:
+                    self.log("Plex : scan non déclenché (" + str(error)[:170] + ").")
+            self.log("Intégration terminée. Aucun changement sur le stockage ni le SHR.")
         self.background(work)
 
     def open_packages(self):
