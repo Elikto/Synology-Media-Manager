@@ -1,5 +1,11 @@
 # Synology Media Manager
 
+## ⬇️ Télécharger l'application
+
+[**⬇️ TÉLÉCHARGER DIRECTEMENT Synology Media Manager (.pyw)**](https://github.com/Elikto/Synology-Media-Manager/raw/refs/heads/main/SynologyMediaManager.pyw)
+
+Le lien mène directement au fichier Windows. Après la première installation, utiliser le bouton **Vérifier les mises à jour** dans l'application.
+
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python. Le programme utilise le PC de l'utilisateur pour joindre son NAS via **HTTPS et Tailscale** ; ChatGPT n'accède pas directement au réseau privé.
 
 > **Version 0.1.0 : diagnostic en lecture seule.** Aucun paquet installé, aucune création de dossier, aucune modification du stockage ou du RAID. Le DS218j peut être limité à 512 Mo de RAM.
