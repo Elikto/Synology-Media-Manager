@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
-  "sha256": "112e4193272da1397a108ef3eb8c82d6dc4a079e6dfdc74606c96a896a17ef37",
-  "notes": "Application Windows EXE autonome, téléchargement en un clic et mise à jour intégrée depuis GitHub Releases."
+  "version": "0.3.0",
+  "sha256": "7525cd06cd3dfa7425f41e8bd0d030cd3f2c46637f51578feb7980959c1d7fb6",
+  "notes": "Création guidée et sécurisée des sous-dossiers multimédias après création du partage Media dans DSM."
 }
