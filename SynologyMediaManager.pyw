@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -798,6 +798,7 @@ class Application:
         media_row.pack(fill="x", pady=(0, 11))
         ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
         ttk.Button(media_row, text="Ouvrir DSM", command=self.open_dsm).pack(side="left", padx=3)
+        ttk.Button(media_row, text="Ouvrir bibliothèque", command=self.open_media_library).pack(side="left", padx=3)
         ttk.Button(media_row, text="Journal MAJ", command=self.show_update_history).pack(side="left", padx=3)
         ttk.Label(media_row, text="Bibliothèque sur volume1.",
                   foreground="#526577").pack(side="left", padx=9)
@@ -900,9 +901,10 @@ class Application:
                     self.open_dsm()
                 elif kind == "setup_remaining":
                     lines = "\n".join("• " + item for item in value)
-                    if messagebox.askyesno("Configuration : dernières étapes",
-                        "Les étapes non automatisables sur ce DSM sont :\n\n" + lines +
-                        "\n\nOuvrir DSM maintenant ?"):
+                    self.log("Intervention nécessaire : " + "; ".join(value))
+                    if messagebox.askyesno("Configuration : intervention requise",
+                        "La configuration ne peut pas se terminer automatiquement :\n\n" + lines +
+                        "\n\nOuvrir DSM pour cette étape ?"):
                         self.open_dsm()
                 elif kind == "restart":
                     self.root.after(400, self.root.destroy)
@@ -955,6 +957,23 @@ class Application:
         self.cfg = {"host": host, "port": port, "fingerprint": self.pending_fp}
         store_config(self.cfg)
         self.log("Certificat épinglé localement. En cas de changement, accès bloqué.")
+
+    def open_media_library(self):
+        """Ouvre le partage NAS via SMB, sans indexation DLNA."""
+        try:
+            host, _port = self.settings()
+            if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or host.startswith("-"):
+                raise ValueError("Nom ou adresse du NAS non valide pour SMB.")
+            if os.name != "nt" or not hasattr(os, "startfile"):
+                raise RuntimeError("L'ouverture directe SMB nécessite Windows.")
+            share_path = "\\\\" + host + "\\Media"
+            os.startfile(share_path)
+            self.log("Bibliothèque NAS ouverte dans l'Explorateur Windows (SMB).")
+            self.log("SMB fonctionne sans indexation DLNA si le service et les droits sont actifs.")
+        except Exception as exc:
+            messagebox.showerror("Bibliothèque NAS",
+                "Ouverture SMB impossible : " + str(exc) +
+                "\nVérifie l'accès SMB et les autorisations sur le partage Media.")
 
     def open_dsm(self):
         try:
@@ -1108,12 +1127,16 @@ class Application:
 
                 try:
                     state, explanation = media_index_status(client, core_sid)
-                    self.log("Indexation multimédia : " + explanation)
+                    self.log("Indexation vidéo DLNA : " + explanation)
                     if state != "ready":
-                        unresolved.append("Vérifier l'indexation Vidéo des dossiers Films et Series dans DSM")
+                        self.log("DLNA facultatif : la lecture SMB et les téléchargements "
+                                 "fonctionnent indépendamment de cette indexation.")
+                        self.log("Pour les téléviseurs DLNA uniquement, l'indexation "
+                                 "doit être ajoutée dans DSM > Service d'indexation.")
                 except Exception as error:
-                    self.log("Lecture de l'indexation DSM impossible : " + str(error))
-                    unresolved.append("Contrôler l'indexation vidéo dans DSM")
+                    self.log("Indexation DLNA non vérifiable : " + str(error))
+                    self.log("L'accès SMB et Download Station ne nécessitent pas l'indexation.")
+
                 self.log("Pour le téléphone PC éteint : utiliser Download Station depuis DSM via Tailscale/QuickConnect.")
                 self.log("=== Résultat : configuration automatique terminée ===")
             finally:
