@@ -20,8 +20,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import urllib.parse
 import urllib.request
+import webbrowser
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -120,6 +121,87 @@ def fetch_release_file(version, filename, maximum, sink=None):
                 if sink is None:
                     data.extend(chunk)
     return digest.hexdigest(), bytes(data), size
+
+
+MEDIA_SHARE = "Media"
+MEDIA_FOLDERS = ("Films", "Series", "Telechargements")
+
+
+def check_media_storage(storage):
+    """Empêche une nouvelle écriture si la santé du volume est incertaine."""
+    pools = storage.get("storagePools") or []
+    volumes = storage.get("volumes") or []
+    if len(pools) != 1 or len(volumes) != 1:
+        raise RuntimeError("Stockage différent du NAS attendu : aucune écriture.")
+    pool = pools[0]
+    if str(pool.get("status", "")).lower() != "normal":
+        raise RuntimeError("Groupe SHR non normal : création refusée.")
+    if pool.get("is_backgroundbuilding") not in (False, 0, None):
+        raise RuntimeError("Opération RAID en cours : création reportée.")
+    progress = pool.get("progress")
+    if isinstance(progress, dict):
+        pct = progress.get("percent", -1)
+        try:
+            number = float(pct)
+        except (TypeError, ValueError):
+            number = -1
+        if 0 <= number < 100:
+            raise RuntimeError("Synchronisation RAID inachevée : création refusée.")
+    vol = volumes[0]
+    if str(vol.get("status", "")).lower() not in ("normal", "healthy"):
+        raise RuntimeError("Volume non normal : création refusée.")
+    return True
+
+
+def missing_media_folders(files):
+    if not isinstance(files, list):
+        raise RuntimeError("Réponse File Station inattendue : aucune écriture.")
+    existing = {}
+    for entry in files:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if name in MEDIA_FOLDERS:
+            if not entry.get("isdir"):
+                raise RuntimeError("Un fichier porte déjà le nom " + str(name))
+            existing[name] = True
+    return [n for n in MEDIA_FOLDERS if n not in existing]
+
+
+def file_station_entries(client, sid):
+    """Lecture des dossiers déjà présents : ne jamais écraser les fichiers."""
+    result = client.request("SYNO.FileStation.List", 2, "list",
+        {"folder_path": json.dumps("/" + MEDIA_SHARE),
+         "offset": "0", "limit": "1000"}, sid=sid)
+    total = int(result.get("total", -1))
+    files = result.get("files")
+    if not isinstance(files, list) or total < 0:
+        raise RuntimeError("Lecture File Station impossible ; création annulée.")
+    if total > len(files):
+        # La page retournée ne contient pas tous les fichiers ; pas de supposition.
+        raise RuntimeError("Dossier Media trop rempli pour une création sûre ; inspecter DSM.")
+    return files
+
+
+def create_media_subfolder(client, sid, name):
+    if name not in MEDIA_FOLDERS:
+        raise ValueError("Nom de dossier non autorisé.")
+    return client.request("SYNO.FileStation.CreateFolder", 2, "create",
+        {"folder_path": json.dumps(["/" + MEDIA_SHARE]),
+         "name": json.dumps([name]),
+         "force_parent": "false"}, sid=sid)
+
+
+def check_media_share(shares):
+    if not isinstance(shares, list):
+        raise RuntimeError("Liste des partages non disponible.")
+    matches = [entry for entry in shares if isinstance(entry, dict)
+               and entry.get("name") == MEDIA_SHARE]
+    if not matches:
+        return False
+    if len(matches) != 1 or matches[0].get("vol_path") != "/volume1":
+        raise RuntimeError("Partage Media présent, mais sur un autre volume : création annulée.")
+    return True
 
 
 def redact_report(data):
@@ -316,6 +398,12 @@ class Application:
         ttk.Button(row, text="Analyse Qwen", command=self.analyze_qwen).pack(side="left", padx=3)
         ttk.Button(row, text="Exporter rapport", command=self.export).pack(side="left", padx=3)
         ttk.Button(row, text="Vérifier les mises à jour", command=self.check_updates).pack(side="left", padx=3)
+        media_row = ttk.Frame(outer)
+        media_row.pack(fill="x", pady=(0, 11))
+        ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
+        ttk.Button(media_row, text="Ouvrir DSM", command=self.open_dsm).pack(side="left", padx=3)
+        ttk.Label(media_row, text="Après création du partage « Media » dans DSM.",
+                  foreground="#526577").pack(side="left", padx=9)
         ttk.Label(outer, textvariable=self.status).pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
         self.progress.pack(fill="x", pady=(4, 8))
@@ -358,6 +446,13 @@ class Application:
                         "\n\nCompare cette empreinte avec une source indépendante avant de l'approuver.")
                 elif kind == "update":
                     self.offer_update(value)
+                elif kind == "media_missing":
+                    if messagebox.askyesno("Partager Media absent",
+                        "Le partage « Media » n'existe pas encore.\n\n"
+                        "Crée-le une seule fois dans DSM : Panneau de configuration > "
+                        "Dossier partagé > Créer, sur volume1.\n\n"
+                        "Ouvrir DSM maintenant ?"):
+                        self.open_dsm()
                 elif kind == "restart":
                     self.root.after(400, self.root.destroy)
         except queue.Empty:
@@ -409,6 +504,63 @@ class Application:
         self.cfg = {"host": host, "port": port, "fingerprint": self.pending_fp}
         store_config(self.cfg)
         self.log("Certificat épinglé localement. En cas de changement, accès bloqué.")
+
+    def open_dsm(self):
+        try:
+            host, port = self.settings()
+            if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+                raise ValueError("Adresse NAS non prise en charge pour ouverture navigateur.")
+            url = "https://" + host + ":" + str(port) + "/"
+            webbrowser.open(url)
+            self.log("DSM ouvert dans le navigateur. Connexion manuelle à effectuer.")
+        except Exception as exc:
+            messagebox.showerror("Ouvrir DSM", str(exc))
+
+    def prepare_media(self):
+        if not messagebox.askyesno("Créer les dossiers multimédias",
+            "Ce bouton vérifie le SHR et le partage « Media » sur volume1, puis "
+            "crée UNIQUEMENT les dossiers absents :\n"
+            "  • Films\n  • Series\n  • Telechargements\n\n"
+            "Le disque 1 présente toujours UNC=129. Les données importantes "
+            "doivent être sauvegardées indépendamment.\n\n"
+            "Autorises-tu explicitement cette création, sans suppression ni changement RAID ?"):
+            return
+        user, password = self.username.get().strip(), self.password.get()
+        if not user or not password:
+            messagebox.showwarning("DSM", "Saisis les identifiants DSM dans l'application.")
+            return
+
+        def work():
+            host, port = self.settings()
+            client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
+            sid = None
+            try:
+                sid = client.login(user, password)
+                self.log("Préparation multimédia : relecture du SHR (aucune modification)…")
+                storage = client.request("SYNO.Storage.CGI.Storage", 1, "load_info", sid=sid)
+                check_media_storage(storage)
+                self.log("Contrôle SHR et volume : OK.")
+                share_data = client.request("SYNO.Core.Share", 1, "list", sid=sid)
+                if not check_media_share(share_data.get("shares")):
+                    self.log("Aucun partage « Media » trouvé. Action stoppée : "
+                             "il doit être créé depuis DSM une seule fois.")
+                    self.events.put(("media_missing", None))
+                    return
+                files = file_station_entries(client, sid)
+                missing = missing_media_folders(files)
+                if not missing:
+                    self.log("Tous les dossiers multimédias existent déjà. Aucune écriture.")
+                    return
+                self.log("Création limitée aux dossiers absents : " + ", ".join(missing))
+                for name in missing:
+                    create_media_subfolder(client, sid, name)
+                    self.log("Dossier créé : /Media/" + name)
+                self.log("Préparation terminée. Aucun fichier supprimé ou déplacé.")
+            finally:
+                if sid:
+                    client.logout(sid)
+
+        self.background(work)
 
     def audit(self):
         user, password = self.username.get().strip(), self.password.get()
