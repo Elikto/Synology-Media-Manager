@@ -322,6 +322,38 @@ class TestManager(unittest.TestCase):
         self.assertFalse(APP["wait_for_package"](FakeDSM(), "sid", "MediaServer",
             lambda text: None, sleep=lambda secs: None, attempts=2))
 
+    def test_media_unc_path_is_limited_to_media_share(self):
+        path = APP["unc_media_path"]("nas.example.ts.net")
+        self.assertEqual(path, "\\\\nas.example.ts.net\\Media")
+        self.assertEqual(APP["unc_media_path"]("100.68.10.95"),
+                         "\\\\100.68.10.95\\Media")
+        for invalid in ("https://nas", "foo/bar", r"foo\secrets", "-bad", "",
+                        "host.", "../nas", "foo\nbar"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                APP["unc_media_path"](invalid)
+
+    def test_parent_media_folder_index_is_sufficient(self):
+        class MockClient:
+            def __init__(self, files):
+                self.files = files
+                self.methods = []
+            def request(self, api, version, method, params=None, sid=None, path="entry.cgi"):
+                self.methods.append(method)
+                if api == "SYNO.API.Info":
+                    return {"SYNO.Core.MediaIndexing.IndexFolder":
+                            {"path": "entry.cgi", "maxVersion": 1}}
+                return {"folders": self.files}
+        for folder in ("/volume1/Media", "/Media"):
+            with self.subTest(folder=folder):
+                client = MockClient([{"path": folder, "type": "video"}])
+                status, _ = APP["media_index_status"](client, "sid")
+                self.assertEqual(status, "ready")
+                self.assertEqual(client.methods, ["query", "get"])
+        unrelated = MockClient([{"path": "/volume1/Movies",
+                                 "type": "video"}])
+        status, _ = APP["media_index_status"](unrelated, "sid")
+        self.assertEqual(status, "missing")
+
     def test_media_indexing_status_read_only(self):
         class FakeDSM:
             def __init__(self, folders):
