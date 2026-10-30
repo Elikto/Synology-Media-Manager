@@ -1,5 +1,5 @@
 {
-  "version": "0.8.2",
-  "sha256": "8e8b837d5bf8d07b1778dceea0f1e73b88664a3692c07dde9f215b7dcb7f2438",
-  "notes": "Configuration Kodi + SMB + Download Station sans Plex ni Emby. Suppression des boutons et sondes Plex/Emby, copie des chemins SMB pour Kodi et conservation des intégrations *arr facultatives."
+  "version": "0.9.0",
+  "sha256": "15b7cef09e6d2944a941afee0e2b17f1500160541711e626c92ec99d0d43e1d0",
+  "notes": "Assistant de liaison Download Station vers Sonarr/Radarr après vérification API, Prowlarr et Kodi via SMB. N'ajoute pas d'indexeurs ni ne supprime de données."
 }
