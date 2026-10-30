@@ -177,7 +177,7 @@ def downloadstation_client_payload(schemas, nas_host, nas_port, username, passwo
     if not isinstance(fields, list):
         raise RuntimeError("Schéma Download Station invalide.")
     values = {
-        "host": nas_host, "port": nas_port, "useSsl": nas_port == 5001,
+        "host": nas_host, "port": nas_port, "useSsl": True,
         "username": username, "password": password, "tvCategory": category,
         "tvDirectory": "",
     }
