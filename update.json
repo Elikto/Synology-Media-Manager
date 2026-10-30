@@ -1,5 +1,5 @@
 {
-  "version": "0.8.1",
-  "sha256": "37076ba897cfa6d6ddd349500e98afd6fb09a7bd169ae0e6aa959ee0553b74d5",
-  "notes": "Détection automatique des paquets Plex et Emby du Synology, contrôle local de disponibilité, boutons Ouvrir Plex et Ouvrir Emby et formulaire *arr sans adresses localhost préremplies."
+  "version": "0.8.2",
+  "sha256": "8e8b837d5bf8d07b1778dceea0f1e73b88664a3692c07dde9f215b7dcb7f2438",
+  "notes": "Configuration Kodi + SMB + Download Station sans Plex ni Emby. Suppression des boutons et sondes Plex/Emby, copie des chemins SMB pour Kodi et conservation des intégrations *arr facultatives."
 }
