@@ -156,6 +156,120 @@ def link_prowlarr(prowlarr, prowlarr_key, targets, opener=None):
     return results
 
 
+def downloadstation_client_payload(schemas, nas_host, nas_port, username, password,
+                                   category):
+    """Prépare uniquement le modèle TorrentDownloadStation fourni par l'API *arr."""
+    from copy import deepcopy
+    if category not in ("sonarr", "radarr"):
+        raise ValueError("Catégorie non autorisée.")
+    nas_host = local_host(nas_host)
+    nas_port = int(nas_port)
+    if not 1 <= nas_port <= 65535 or not username or not password:
+        raise ValueError("Connexion Download Station incomplète.")
+    if not isinstance(schemas, list):
+        raise RuntimeError("Schéma *arr invalide.")
+    template = next((item for item in schemas if isinstance(item, dict)
+                     and item.get("implementation") == "TorrentDownloadStation"), None)
+    if template is None:
+        raise RuntimeError("Le client TorrentDownloadStation n'est pas pris en charge par cette version.")
+    payload = deepcopy(template)
+    fields = payload.get("fields")
+    if not isinstance(fields, list):
+        raise RuntimeError("Schéma Download Station invalide.")
+    values = {
+        "host": nas_host, "port": nas_port, "useSsl": nas_port == 5001,
+        "username": username, "password": password, "tvCategory": category,
+        "tvDirectory": "",
+    }
+    names = set()
+    for field in fields:
+        if not isinstance(field, dict):
+            raise RuntimeError("Champ de configuration invalide.")
+        name = str(field.get("name") or "")
+        if name in values:
+            field["value"] = values[name]
+            names.add(name)
+    required = {"host", "port", "useSsl", "username", "password", "tvCategory"}
+    if not required.issubset(names):
+        raise RuntimeError("Schéma Download Station incompatible : " +
+                           ", ".join(sorted(required - names)))
+    payload["name"] = "Synology Download Station (" + category + ")"
+    payload["enable"] = True
+    # Les torrents doivent rester en partage : ne pas autoriser une suppression
+    # automatique des téléchargements depuis Sonarr ou Radarr.
+    if "removeCompletedDownloads" in payload:
+        payload["removeCompletedDownloads"] = False
+    return payload
+
+
+def downloadstation_clients_for(name, host, port, key, opener=None):
+    """Inspecte en lecture seule les clients configurés dans Sonarr/Radarr."""
+    if name not in ("Sonarr", "Radarr"):
+        raise ValueError("Application non prise en charge.")
+    api, _version = servarr_version(name, host, port, key, opener=opener)
+    base = "/api/" + api + "/downloadclient"
+    clients = api_json(host, port, base, key, opener=opener)
+    if not isinstance(clients, list):
+        raise RuntimeError("Liste des clients torrent invalide.")
+    return api, clients
+
+
+def link_downloadstation_to_arr(name, arr_host, arr_port, arr_key,
+                                nas_host, nas_port, nas_user, nas_password,
+                                opener=None):
+    """Test et ajout idempotent, sans modifier ou supprimer les clients existants.
+
+    Les identifiants du NAS sont enregistrés par Sonarr/Radarr si l'ajout réussit.
+    Ne jamais les journaliser. L'import nécessite un partage SMB monté sur l'hôte.
+    """
+    if name not in ("Sonarr", "Radarr"):
+        raise ValueError("Seuls Sonarr et Radarr peuvent être configurés.")
+    if not arr_key:
+        raise ValueError("Clé API *arr manquante.")
+    api, clients = downloadstation_clients_for(name, arr_host, arr_port, arr_key,
+                                                opener=opener)
+    target_host = local_host(nas_host)
+    target_port = int(nas_port)
+    category = name.lower()
+    for item in clients:
+        if not isinstance(item, dict):
+            continue
+        if item.get("implementation") != "TorrentDownloadStation":
+            continue
+        fields = item.get("fields") or []
+        existing = {str(field.get("name")): field.get("value")
+                    for field in fields if isinstance(field, dict)}
+        try:
+            same = (str(existing.get("host") or "").lower() == target_host and
+                    int(existing.get("port")) == target_port and
+                    str(existing.get("tvCategory") or "") == category)
+        except (TypeError, ValueError):
+            same = False
+        if same:
+            return "déjà configuré, aucune modification"
+    base = "/api/" + api + "/downloadclient"
+    schema = api_json(arr_host, arr_port, base + "/schema", arr_key,
+                      opener=opener)
+    payload = downloadstation_client_payload(schema, target_host, target_port,
+                                             nas_user, nas_password, category)
+    # Les nouvelles versions permettent de tester le client avant l'écriture.
+    check = api_json(arr_host, arr_port, base + "/test", arr_key,
+                     method="POST", payload=payload, opener=opener)
+    if check not in ([], {}):
+        raise RuntimeError(name + " refuse la liaison Download Station : test non validé.")
+    result = api_json(arr_host, arr_port, base, arr_key,
+                      method="POST", payload=payload, opener=opener)
+    if not isinstance(result, dict) or not isinstance(result.get("id"), int):
+        raise RuntimeError(name + " : création non confirmée.")
+    # Relire l'état confirmé par l'application, sans écraser aucun client.
+    _, updated = downloadstation_clients_for(name, arr_host, arr_port, arr_key,
+                                              opener=opener)
+    if not any(isinstance(row, dict) and row.get("id") == result["id"]
+               for row in updated):
+        raise RuntimeError(name + " : client non retrouvé après création.")
+    return "client Download Station créé, test réussi"
+
+
 def kodi_media_paths(host):
     """Deux sources SMB accessibles depuis Kodi, sans configuration du NAS."""
     safe = local_host(host)
