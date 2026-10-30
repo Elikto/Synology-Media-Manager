@@ -94,69 +94,32 @@ class IntegrationsTests(unittest.TestCase):
                               if f["name"] == "apiKey"), "sonarr-key")
         self.assertNotIn("sonarr-key", post[0][0])
 
-    def test_existing_plex_emby_packages_detected_from_dsm(self):
-        installed = mod.installed_video_servers([
-            {"name": "Plex Media Server", "id": "PlexMediaServer"},
-            {"name": "Emby Server", "id": "EmbyServer"},
-            {"name": "Download Station", "id": "DownloadStation"},
-        ])
-        self.assertEqual(installed, {"Plex", "Emby"})
-        self.assertEqual(mod.installed_video_servers([]), set())
-        self.assertEqual(mod.installed_video_servers(None), set())
+    def test_kodi_media_paths_only_include_media_library(self):
+        expected = {
+            "Films": "smb://192.168.1.12/Media/Films/",
+            "Series": "smb://192.168.1.12/Media/Series/"
+        }
+        self.assertEqual(mod.kodi_media_paths("192.168.1.12"), expected)
+        self.assertEqual(mod.kodi_media_paths("100.65.32.4")["Films"],
+                         "smb://100.65.32.4/Media/Films/")
+        for invalid in ("https://example.org", "8.8.8.8", "host/share"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                mod.kodi_media_paths(invalid)
+        self.assertEqual(set(mod.SERVICE_PORTS),
+                         {"Prowlarr", "Sonarr", "Radarr", "Kodi"})
 
-    def test_plex_emby_no_token_read_only_detection(self):
-        plex_base = "http://100.68.10.95:32400"
-        emby_base = "http://100.68.10.95:8096"
-        opener = FakeOpener({
-            (plex_base + "/identity", "GET"): (
-                b'<MediaContainer version="1.42.3" machineIdentifier="SECRET-ID" claimed="1"/>'),
-            (emby_base + "/emby/System/Info/Public", "GET"):
-                encode({"ServerName": "PrivateNAS", "Id": "SECRET-ID",
-                        "Version": "4.9.2.0", "LocalAddresses": ["10.0.0.7"]}),
-        })
-        self.assertEqual(mod.probe_video_server("Plex", "100.68.10.95", opener), "1.42.3")
-        self.assertEqual(mod.probe_video_server("Emby", "100.68.10.95", opener), "4.9.2.0")
-        self.assertTrue(all(call[1] == "GET" for call in opener.calls))
-        self.assertTrue(all("Authorization" not in call[2] and "X-Plex-Token" not in call[2]
-                            for call in opener.calls))
-        self.assertNotIn("SECRET-ID", str([
-            mod.probe_video_server("Plex", "100.68.10.95", opener),
-            mod.probe_video_server("Emby", "100.68.10.95", opener)]))
-
-    def test_video_server_urls_are_local(self):
-        self.assertEqual(mod.video_server_address("Plex", "192.168.1.2"),
-                         "http://192.168.1.2:32400/web")
-        self.assertEqual(mod.video_server_address("Emby", "192.168.1.2"),
-                         "http://192.168.1.2:8096/web/index.html")
-        with self.assertRaises(ValueError):
-            mod.video_server_address("Plex", "8.8.8.8")
-        with self.assertRaises(ValueError):
-            mod.video_server_address("Other", "192.168.1.2")
-
-    def test_kodi_scan_and_plex_sections(self):
+    def test_kodi_scan_uses_existing_library_without_other_servers(self):
         kodi = "http://192.168.1.3:8080"
         opener = FakeOpener({
-            (kodi + "/jsonrpc", "POST"): encode({"jsonrpc": "2.0", "id": 1,
-                                                 "result": "OK"})
+            (kodi + "/jsonrpc", "POST"): encode({
+                "jsonrpc": "2.0", "id": 1, "result": "OK"})
         })
         self.assertTrue(mod.kodi_scan("192.168.1.3", 8080, opener=opener))
-        kodi_call = opener.calls[0]
-        self.assertEqual(json.loads(kodi_call[3])["method"], "VideoLibrary.Scan")
-        plex = "http://192.168.1.4:32400"
-        plex_opener = FakeOpener({
-            (plex + "/library/sections", "GET"): (
-                b'<MediaContainer><Directory key="1" type="movie"/>'
-                b'<Directory key="2" type="show"/>'
-                b'<Directory key="3" type="artist"/></MediaContainer>'),
-            (plex + "/library/sections/1/refresh", "GET"): b"",
-            (plex + "/library/sections/2/refresh", "GET"): b"",
-        })
-        self.assertEqual(mod.plex_scan("192.168.1.4", 32400, "TOKEN",
-                                      opener=plex_opener), 2)
-        self.assertEqual(len(plex_opener.calls), 3)
-        self.assertTrue(all("TOKEN" not in call[0]
-                            for call in plex_opener.calls))
-
+        self.assertEqual(len(opener.calls), 1)
+        call = opener.calls[0]
+        self.assertEqual(call[1], "POST")
+        self.assertEqual(json.loads(call[3])["method"], "VideoLibrary.Scan")
+        self.assertNotIn("X-Plex-Token", call[2])
 
 if __name__ == "__main__":
     unittest.main()
