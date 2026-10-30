@@ -20,12 +20,13 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from media_integrations import (SERVICE_PORTS, servarr_version, link_prowlarr,
-                                kodi_scan, local_host, kodi_media_paths)
+                                kodi_scan, local_host, kodi_media_paths,
+                                link_downloadstation_to_arr, prowlarr_indexer_count)
 import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.8.2"
+VERSION = "0.9.0"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -879,7 +880,7 @@ class Application:
         ttk.Button(download_row, text="Centre de paquets DSM", command=self.open_packages).pack(side="left", padx=(0, 7))
         ttk.Button(download_row, text="Tâches Download Station", command=self.download_tasks).pack(side="left", padx=3)
         ttk.Button(download_row, text="Ajouter un téléchargement", command=self.add_download).pack(side="left", padx=3)
-        ttk.Button(download_row, text="Intégrer Kodi / *arr",
+        ttk.Button(download_row, text="Configurer Kodi / torrents / *arr",
                    command=self.open_integrations).pack(side="left", padx=3)
         ttk.Label(download_row, text="Serveurs *arr externes facultatifs.",
                   foreground="#526577").pack(side="left", padx=8)
@@ -1396,17 +1397,18 @@ class Application:
     def open_integrations(self):
         """Intégrations sur un hôte externe, sans toucher au DS218j."""
         dialog = tk.Toplevel(self.root)
-        dialog.title("Intégrations Kodi · Sonarr · Radarr · Prowlarr")
-        dialog.geometry("830x510")
+        dialog.title("Configuration Kodi · Download Station · Sonarr · Radarr · Prowlarr")
+        dialog.geometry("830x620")
         dialog.transient(self.root)
         dialog.grab_set()
         area = ttk.Frame(dialog, padding=12)
         area.pack(fill="both", expand=True)
         ttk.Label(area, text="Connecter les services multimédias",
                   font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(area, text="Ton DS218j (ARMv7, 512 Mo) conserve les fichiers et Download Station. "
-                  "Sonarr / Prowlarr / Radarr doivent être hébergés "
-                  "sur un appareil compatible x64 ou ARM64.",
+        ttk.Label(area, text="Le DS218j conserve Download Station et les fichiers. "
+                  "Kodi lit directement Media via SMB. "
+                  "Prowlarr / Sonarr / Radarr doivent fonctionner sur un autre appareil "
+                  "compatible (ou sur le PC tant qu'il reste allumé).",
                   wraplength=780, foreground="#526577").pack(anchor="w", pady=(3, 10))
         ttk.Label(area, text="Les champs vides sont ignorés. "
                   "Prowlarr, Sonarr et Radarr ne sont pas détectés sur ce NAS : "
@@ -1436,10 +1438,20 @@ class Application:
         ttk.Label(kodi_row, text="Kodi : utilisateur HTTP (facultatif)").pack(side="left")
         kodi_username = ttk.Entry(kodi_row, width=16)
         kodi_username.pack(side="left", padx=8)
-        ttk.Label(area, text="Kodi : le champ « Clé » représente le mot de passe HTTP. "
-                  "L'accès distant JSON-RPC doit être autorisé dans Kodi. "
-                  "Pour ajouter les sources films/séries, utiliser Copier chemins Kodi.",
-                  wraplength=780, foreground="#526577").pack(anchor="w", pady=(0, 12))
+        ttk.Label(area, text="Kodi : le champ « Clé » est son mot de passe HTTP. "
+                  "Activer le contrôle distant dans Kodi, puis ajouter les sources SMB "
+                  "via Copier chemins Kodi. Prowlarr ne peut synchroniser que les "
+                  "indexeurs déjà configurés par toi sur ses propres serveurs.",
+                  wraplength=780, foreground="#526577").pack(anchor="w", pady=(0, 10))
+        connect_download = tk.BooleanVar(value=False)
+        ttk.Checkbutton(area, variable=connect_download,
+            text="Relier Download Station du NAS à Sonarr/Radarr (si accessibles)").pack(
+                anchor="w", pady=4)
+        ttk.Label(area, text="Cette option ajoute un client torrent dans chaque application *arr "
+                  "après test ; Sonarr/Radarr conserveront les identifiants DSM dans leur "
+                  "configuration. Un compte NAS dédié aux téléchargements est recommandé. "
+                  "L'accès SMB depuis la machine *arr reste à configurer pour importer les fichiers.",
+                  wraplength=780, foreground="#8b5b15").pack(anchor="w", pady=(0, 10))
 
         def submit():
             config = {}
@@ -1459,21 +1471,41 @@ class Application:
                     return
                 config[name] = (address, parsed_port, secret)
             username = kodi_username.get().strip()
+            want_download = bool(connect_download.get())
+            if want_download:
+                dsm_user = self.username.get().strip()
+                dsm_password = self.password.get()
+                if not dsm_user or not dsm_password:
+                    messagebox.showerror("Download Station",
+                        "Renseigne les identifiants DSM dans la fenêtre principale.",
+                        parent=dialog)
+                    return
+                if not any(name in config for name in ("Sonarr", "Radarr")):
+                    messagebox.showerror("Download Station",
+                        "Indique au moins Sonarr ou Radarr avec sa clé API.",
+                        parent=dialog)
+                    return
+            else:
+                dsm_user = dsm_password = ""
             if not config:
                 messagebox.showwarning("Services", "Renseigne au moins un hôte.",
                                        parent=dialog)
                 return
             if not messagebox.askyesno("Automatisation multimédia",
                 "Tester les services locaux configurés puis, s'ils sont disponibles :\n"
-                "• créer les liaisons Prowlarr ↔ Sonarr/Radarr manquantes ;\n"
-                "• demander le scan de la vidéothèque Kodi existante.\n\n"
-                "Aucune recherche de contenus, suppression de fichiers, installation de "
-                "paquet ni modification RAID.\n"
-                "Les clés ne sont conservées qu'en mémoire pendant cette opération.\n\n"
+                "• relier les applications Prowlarr déjà joignables ;\n"
+                "• demander le scan de la vidéothèque Kodi existante ;\n"
+                + ("• ajouter Download Station dans Sonarr/Radarr après un test API ;\n"
+                   "  leurs paramètres conserveront les identifiants du compte DSM.\n"
+                   if want_download else "")
+                + "\nAucune recherche de torrents ni suppression de fichiers ou modification RAID.\n"
+                "Les clés restent en mémoire dans ce programme.\n\n"
                 "Continuer ?", parent=dialog):
                 return
             dialog.destroy()
-            self.configure_integrations(config, username)
+            self.configure_integrations(
+                config, username, want_download,
+                dsm_user, dsm_password)
 
         action = ttk.Frame(area)
         action.pack(fill="x", pady=8)
@@ -1482,7 +1514,8 @@ class Application:
         ttk.Button(action, text="Annuler",
                    command=dialog.destroy).pack(side="left", padx=8)
 
-    def configure_integrations(self, config, kodi_username=""):
+    def configure_integrations(self, config, kodi_username="", connect_download=False,
+                               dsm_user="", dsm_password=""):
         """Déclenché après approbation explicite ; les secrets restent en mémoire."""
         def work():
             self.log("=== Intégration multimédia : connexions locales ===")
@@ -1502,6 +1535,15 @@ class Application:
                 except Exception as error:
                     self.log(name + " : connexion indisponible (" + str(error)[:170] + ").")
             if "Prowlarr" in detected:
+                try:
+                    prowlarr = detected["Prowlarr"]
+                    count = prowlarr_indexer_count(*prowlarr)
+                    self.log("Prowlarr : " + str(count) + " indexeur(s) configuré(s).")
+                    if count == 0:
+                        self.log("Prowlarr : ajouter des sources que tu es autorisé à utiliser "
+                                 "dans l'interface du service.")
+                except Exception:
+                    self.log("Prowlarr : lecture des indexeurs indisponible.")
                 targets = {k: detected[k] for k in ("Sonarr", "Radarr") if k in detected}
                 if targets:
                     try:
@@ -1513,6 +1555,40 @@ class Application:
                         self.log("Liaisons Prowlarr non modifiées : " + str(error)[:170])
                 else:
                     self.log("Prowlarr : aucune application Sonarr/Radarr joignable à relier.")
+            if connect_download:
+                host, port = self.settings()
+                sid = None
+                client = DsmClient(host, port, self.cfg.get("fingerprint", ""))
+                try:
+                    sid = client.login(dsm_user, dsm_password, session="DownloadStation")
+                    tasks, total = downloadstation_tasks(client, sid)
+                    self.log("Download Station : joignable, " + str(total) +
+                             " tâche(s) existante(s).")
+                except Exception:
+                    self.log("Download Station : connexion DSM refusée ou indisponible. "
+                             "Aucun client torrent ajouté aux applications *arr.")
+                else:
+                    for name in ("Sonarr", "Radarr"):
+                        if name not in detected:
+                            continue
+                        app_host, app_port, app_key = detected[name]
+                        try:
+                            result = link_downloadstation_to_arr(
+                                name, app_host, app_port, app_key,
+                                host, port, dsm_user, dsm_password)
+                            self.log(name + " : " + result)
+                        except Exception:
+                            self.log(name + " : liaison Download Station non validée "
+                                     "(réseau NAS depuis *arr, certificat TLS ou "
+                                     "paramètres API à vérifier).")
+                    self.log("Importation : l'hôte *arr doit pouvoir lire "
+                             "Media/Telechargements et écrire dans Films/Series via SMB.")
+                finally:
+                    if sid:
+                        try:
+                            client.logout(sid, session="DownloadStation")
+                        except Exception:
+                            pass
             if "Kodi" in config:
                 host, port, password = config["Kodi"]
                 try:
