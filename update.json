@@ -1,5 +1,5 @@
 {
-  "version": "0.8.0",
-  "sha256": "dfb8fd227b233684beca84ea9493b0e34b94abc40814ce21907516526c00e0cf",
-  "notes": "Intégrations Kodi, Plex, Sonarr, Radarr et Prowlarr : vérification des services locaux, liaisons Prowlarr idempotentes et actualisation des bibliothèques déjà configurées."
+  "version": "0.8.1",
+  "sha256": "37076ba897cfa6d6ddd349500e98afd6fb09a7bd169ae0e6aa959ee0553b74d5",
+  "notes": "Détection automatique des paquets Plex et Emby du Synology, contrôle local de disponibilité, boutons Ouvrir Plex et Ouvrir Emby et formulaire *arr sans adresses localhost préremplies."
 }
