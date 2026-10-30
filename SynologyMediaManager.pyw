@@ -20,14 +20,12 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from media_integrations import (SERVICE_PORTS, servarr_version, link_prowlarr,
-                                kodi_scan, plex_scan, local_host,
-                                installed_video_servers, video_server_address,
-                                probe_video_server)
+                                kodi_scan, local_host, kodi_media_paths)
 import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "0.8.1"
+VERSION = "0.8.2"
 REPOSITORY = "Elikto/Synology-Media-Manager"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPOSITORY + "/main/"
 APP_NAME = "SynologyMediaManager.pyw"
@@ -831,7 +829,6 @@ class Application:
         self.auto_monitor = False
         self.monitor_scheduled = False
         self.monitor_busy = False
-        self.video_servers_detected = set()
         self.cfg = load_config()
         self.host = tk.StringVar(value=self.cfg["host"])
         self.port = tk.StringVar(value=str(self.cfg["port"]))
@@ -873,6 +870,7 @@ class Application:
         ttk.Button(media_row, text="Créer dossiers multimédias", command=self.prepare_media).pack(side="left", padx=(0, 7))
         ttk.Button(media_row, text="Ouvrir DSM", command=self.open_dsm).pack(side="left", padx=3)
         ttk.Button(media_row, text="Ouvrir bibliothèque", command=self.open_media_library).pack(side="left", padx=3)
+        ttk.Button(media_row, text="Copier chemins Kodi", command=self.copy_kodi_paths).pack(side="left", padx=3)
         ttk.Button(media_row, text="Journal MAJ", command=self.show_update_history).pack(side="left", padx=3)
         ttk.Label(media_row, text="Bibliothèque sur volume1.",
                   foreground="#526577").pack(side="left", padx=9)
@@ -881,24 +879,10 @@ class Application:
         ttk.Button(download_row, text="Centre de paquets DSM", command=self.open_packages).pack(side="left", padx=(0, 7))
         ttk.Button(download_row, text="Tâches Download Station", command=self.download_tasks).pack(side="left", padx=3)
         ttk.Button(download_row, text="Ajouter un téléchargement", command=self.add_download).pack(side="left", padx=3)
-        ttk.Button(download_row, text="Intégrer Kodi / Plex / *arr",
+        ttk.Button(download_row, text="Intégrer Kodi / *arr",
                    command=self.open_integrations).pack(side="left", padx=3)
         ttk.Label(download_row, text="Serveurs *arr externes facultatifs.",
                   foreground="#526577").pack(side="left", padx=8)
-        video_row = ttk.Frame(outer)
-        video_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(video_row, text="Serveurs vidéo sur le NAS :").pack(side="left", padx=(0, 6))
-        self.plex_button = ttk.Button(video_row, text="Ouvrir Plex",
-                                      command=lambda: self.open_video_server("Plex"),
-                                      state="disabled")
-        self.plex_button.pack(side="left", padx=3)
-        self.emby_button = ttk.Button(video_row, text="Ouvrir Emby",
-                                      command=lambda: self.open_video_server("Emby"),
-                                      state="disabled")
-        self.emby_button.pack(side="left", padx=3)
-        self.video_summary = tk.StringVar(value="Serveurs Plex / Emby : vérification en attente")
-        ttk.Label(video_row, textvariable=self.video_summary,
-                  foreground="#526577").pack(side="left", padx=10)
         dashboard = ttk.LabelFrame(outer, text="État du NAS et des téléchargements — lecture seule", padding=8)
         dashboard.pack(fill="x", pady=(0, 8))
         dashboard_controls = ttk.Frame(dashboard)
@@ -1003,8 +987,6 @@ class Application:
                 summary = "NAS accessible"
                 media = "Bibliothèque : état indisponible"
                 rows = []
-                video_detected = set()
-                video_status = "Plex / Emby : détection impossible"
                 core = client.login(user, password)
                 storage = client.request("SYNO.Storage.CGI.Storage", 1, "load_info", sid=core)
                 report = redact_report(storage)
@@ -1022,25 +1004,6 @@ class Application:
                 if anomalies:
                     summary += " | À surveiller : " + ", ".join(anomalies)
                 try:
-                    pkgs = client.request("SYNO.Core.Package", 2, "list", sid=core).get("packages", [])
-                    video_detected = installed_video_servers(pkgs)
-                    if not video_detected:
-                        video_status = "Plex / Emby : aucun paquet détecté"
-                    else:
-                        results = []
-                        for service in ("Plex", "Emby"):
-                            if service not in video_detected:
-                                continue
-                            try:
-                                version = probe_video_server(service, host)
-                                results.append(service + " : accessible (v" + version + ")")
-                            except Exception:
-                                results.append(service +
-                                    " : installé, port standard non accessible depuis ce PC")
-                        video_status = " | ".join(results)
-                except Exception:
-                    video_status = "Plex / Emby : liste DSM indisponible"
-                try:
                     fs = client.login(user, password, session="FileStation")
                     counts = media_folder_overview(client, fs)
                     media = "Bibliothèque Media : " + " · ".join(
@@ -1057,15 +1020,13 @@ class Application:
                 except Exception as error:
                     summary += " | Download Station : non disponible (" + str(error)[:100] + ")"
                 self.events.put(("dashboard", {"summary": summary, "media": media,
-                                                "rows": rows, "video": video_status,
-                                                "video_installed": list(video_detected)}))
+                                                "rows": rows}))
                 if not quiet:
                     self.log("Tableau de bord actualisé en lecture seule.")
             except Exception as error:
                 self.events.put(("dashboard", {
                     "summary": "Connexion NAS impossible : " + str(error)[:200],
-                    "media": "Bibliothèque : en attente", "rows": [],
-                    "video": "Serveurs vidéo : non vérifiés", "video_installed": []}))
+                    "media": "Bibliothèque : en attente", "rows": []}))
                 if not quiet:
                     self.log("ERREUR de connexion au tableau de bord : " + str(error))
             finally:
@@ -1102,17 +1063,10 @@ class Application:
                     info = value
                     self.dashboard_summary.set(info["summary"])
                     self.dashboard_media.set(info["media"])
-                    if "video" in info:
-                        self.video_summary.set(info["video"])
-                        self.set_video_server_buttons(info.get("video_installed", []))
                     for item in self.download_table.get_children():
                         self.download_table.delete(item)
                     for item in info["rows"]:
                         self.download_table.insert("", "end", values=item)
-                elif kind == "media_servers":
-                    self.set_video_server_buttons(value)
-                    visible = ", ".join(sorted(value)) if value else "aucun"
-                    self.video_summary.set("Paquets détectés : " + visible)
                 elif kind == "dashboard_start":
                     if not self.auto_monitor:
                         self.auto_monitor = True
@@ -1225,6 +1179,25 @@ class Application:
         self.cfg = {"host": host, "port": port, "fingerprint": self.pending_fp}
         store_config(self.cfg)
         self.log("Certificat épinglé localement. En cas de changement, accès bloqué.")
+
+    def copy_kodi_paths(self):
+        """Copie les URL SMB Kodi, sans les créer ni toucher au NAS."""
+        try:
+            host, _port = self.settings()
+            urls = kodi_media_paths(host)
+            content = "Films : " + urls["Films"] + "\nSéries : " + urls["Series"]
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self.root.update_idletasks()
+            self.log("Chemins Kodi copiés : ajouter Films et Series dans les sources vidéo Kodi.")
+            messagebox.showinfo("Kodi et Synology",
+                "Chemins Kodi copiés dans le presse-papiers.\n\n"
+                "Dans Kodi : Vidéos > Fichiers > Ajouter une source vidéo.\n"
+                "Ajoute Films puis Series avec les chemins indiqués.\n"
+                "Ton compte NAS devra disposer d'un accès SMB au partage Media.\n"
+                "Aucun serveur Plex ou Emby n'est nécessaire.")
+        except Exception as exc:
+            messagebox.showerror("Chemins Kodi", str(exc))
 
     def open_media_library(self):
         """Ouvre le partage NAS via SMB, sans indexation DLNA."""
@@ -1420,32 +1393,11 @@ class Application:
                 self.log("Aucune suppression ni modification RAID effectuée.")
         self.background(work)
 
-    def set_video_server_buttons(self, installed):
-        """L'interface n'affiche que les lecteurs détectés via DSM."""
-        self.video_servers_detected = set(installed or [])
-        self.plex_button.configure(
-            state="normal" if "Plex" in self.video_servers_detected else "disabled")
-        self.emby_button.configure(
-            state="normal" if "Emby" in self.video_servers_detected else "disabled")
-
-    def open_video_server(self, service):
-        """Ouvre seulement l'interface locale du serveur déjà déclaré par DSM."""
-        try:
-            if service not in self.video_servers_detected:
-                raise RuntimeError("Ce serveur n'a pas été détecté dans les paquets DSM.")
-            host, _port = self.settings()
-            url = video_server_address(service, host)
-            webbrowser.open(url)
-            self.log(service + " : interface locale ouverte dans le navigateur.")
-            self.log("Si la page ne répond pas, vérifie que le paquet est démarré.")
-        except Exception as error:
-            messagebox.showerror("Serveur vidéo", str(error))
-
     def open_integrations(self):
         """Intégrations sur un hôte externe, sans toucher au DS218j."""
         dialog = tk.Toplevel(self.root)
-        dialog.title("Intégrations Kodi · Plex · Sonarr · Radarr · Prowlarr")
-        dialog.geometry("830x560")
+        dialog.title("Intégrations Kodi · Sonarr · Radarr · Prowlarr")
+        dialog.geometry("830x510")
         dialog.transient(self.root)
         dialog.grab_set()
         area = ttk.Frame(dialog, padding=12)
@@ -1453,7 +1405,7 @@ class Application:
         ttk.Label(area, text="Connecter les services multimédias",
                   font=("Segoe UI", 14, "bold")).pack(anchor="w")
         ttk.Label(area, text="Ton DS218j (ARMv7, 512 Mo) conserve les fichiers et Download Station. "
-                  "Sonarr / Prowlarr / Radarr / Plex doivent être hébergés "
+                  "Sonarr / Prowlarr / Radarr doivent être hébergés "
                   "sur un appareil compatible x64 ou ARM64.",
                   wraplength=780, foreground="#526577").pack(anchor="w", pady=(3, 10))
         ttk.Label(area, text="Les champs vides sont ignorés. "
@@ -1486,7 +1438,7 @@ class Application:
         kodi_username.pack(side="left", padx=8)
         ttk.Label(area, text="Kodi : le champ « Clé » représente le mot de passe HTTP. "
                   "L'accès distant JSON-RPC doit être autorisé dans Kodi. "
-                  "Plex : le jeton permet de rafraîchir les bibliothèques existantes.",
+                  "Pour ajouter les sources films/séries, utiliser Copier chemins Kodi.",
                   wraplength=780, foreground="#526577").pack(anchor="w", pady=(0, 12))
 
         def submit():
@@ -1514,7 +1466,7 @@ class Application:
             if not messagebox.askyesno("Automatisation multimédia",
                 "Tester les services locaux configurés puis, s'ils sont disponibles :\n"
                 "• créer les liaisons Prowlarr ↔ Sonarr/Radarr manquantes ;\n"
-                "• demander le scan des bibliothèques Kodi et Plex existantes.\n\n"
+                "• demander le scan de la vidéothèque Kodi existante.\n\n"
                 "Aucune recherche de contenus, suppression de fichiers, installation de "
                 "paquet ni modification RAID.\n"
                 "Les clés ne sont conservées qu'en mémoire pendant cette opération.\n\n"
@@ -1568,14 +1520,6 @@ class Application:
                     self.log("Kodi : actualisation de la vidéothèque demandée.")
                 except Exception as error:
                     self.log("Kodi : scan non déclenché (" + str(error)[:170] + ").")
-            if "Plex" in config:
-                host, port, token = config["Plex"]
-                try:
-                    count = plex_scan(host, port, token)
-                    self.log("Plex : actualisation demandée pour " +
-                             str(count) + " bibliothèques films/séries.")
-                except Exception as error:
-                    self.log("Plex : scan non déclenché (" + str(error)[:170] + ").")
             self.log("Intégration terminée. Aucun changement sur le stockage ni le SHR.")
         self.background(work)
 
@@ -1712,11 +1656,6 @@ class Application:
                     packs = client.request("SYNO.Core.Package", 2, "list", sid=sid).get("packages", [])
                     names = [str(p.get("name") or p.get("id") or "") for p in packs]
                     self.log("Paquets : " + (", ".join(x for x in names if x) if names else "aucun"))
-                    video = installed_video_servers(packs)
-                    self.events.put(("media_servers", list(video)))
-                    if video:
-                        self.log("Serveurs vidéo détectés : " + ", ".join(sorted(video)) +
-                                 ". Vérification de leur accessibilité dans le tableau de bord.")
                 except Exception as exc:
                     self.log("Paquets non disponibles : " + str(exc))
                 self.log("Audit terminé : aucune écriture sur le NAS.")
