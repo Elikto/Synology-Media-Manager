@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.8.0 : centre d'intégrations Sonarr, Radarr, Prowlarr, Kodi et Plex, connexion par API locale/Tailscale, création contrôlée des liaisons Prowlarr et rafraîchissement des bibliothèques Kodi/Plex.** Le tableau de bord du NAS et Download Station restent disponibles.
+**Version 0.8.1 : Plex et Emby détectés automatiquement sur le NAS avec test de disponibilité et boutons d'accès direct.** Le centre d'intégrations *arr/Kodi/Plex et le suivi Download Station restent disponibles.
 
 ## Installation initiale (une seule fois)
 
@@ -36,6 +36,16 @@ Les mots de passe ne sont pas enregistrés.
 5. En cas d'échec, l'application s'arrête et affiche le code DSM ; aucun dossier existant n'est supprimé ni écrasé.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
+
+## Plex et Emby déjà installés — v0.8.1
+
+Dès l'**audit DSM**, l'application reconnaît les paquets `Plex Media Server` et `Emby Server` déjà présents, sans tenter une réinstallation. Le tableau de bord vérifie ensuite **en lecture seule**, sur les ports locaux standards, si Plex (32400, API `/identity`) et Emby (8096, API `/emby/System/Info/Public`) répondent. Les identifiants uniques des serveurs sont ignorés ; seule une version technique non sensible peut être affichée.
+
+Les boutons **Ouvrir Plex** et **Ouvrir Emby** sont activés uniquement lorsque les paquets correspondants ont été détectés par DSM. Ils ouvrent les interfaces web sur l'adresse du NAS déjà configurée (LAN/Tailscale). Les ports standards peuvent être différents si l'utilisateur les a modifiés ; dans ce cas, le test peut afficher « installé mais port non accessible » sans signifier que le serveur est arrêté.
+
+Le formulaire d'intégration Prowlarr/Sonarr/Radarr ne préremplit plus `127.0.0.1`. Ces applications ne figurent pas dans la liste des paquets du DS218j et ne sont pas installées automatiquement. Leurs adresses et clés API sont nécessaires **seulement** si elles existent sur un autre hôte compatible.
+
+**Attention :** « paquet installé » ne signifie pas « serveur démarré et bibliothèque configurée ». Kodi, Plex et Emby peuvent lire directement les formats compatibles, mais le DS218j n'est pas adapté au transcodage vidéo lourd. Aucun partage, fichier, paquet, RAID ni règle de pare-feu n'est modifié par ces vérifications.
 
 ## Centre d'intégrations *arr, Kodi et Plex — v0.8.0
 
