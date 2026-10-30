@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.8.2 : configuration orientée Kodi + SMB + Download Station, sans Plex ni Emby.** Copie des chemins Kodi en un clic et intégrations *arr facultatives sur un autre appareil compatible. Aucun paquet DSM n'est désinstallé.
+**Version 0.9.0 : assistant de liaison Download Station → Sonarr/Radarr avec vérification préalable, synchronisation Prowlarr facultative et Kodi via SMB.** La configuration est lancée uniquement après confirmation, sans suppression de torrents ni modification du SHR.
 
 ## Installation initiale (une seule fois)
 
@@ -37,6 +37,33 @@ Les mots de passe ne sont pas enregistrés.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
 
+## Installation Windows et liaisons torrent — v0.9.0
+
+### Où installer les programmes
+
+Le **DS218j** conserve Download Station et les données. Installer **Sonarr, Radarr et Prowlarr** sur Windows 11, ou sur un second ordinateur compatible qui reste allumé (si un fonctionnement 24 h/24 est nécessaire). Les programmes *arr sur Windows ne seront pas actifs lorsque le PC est éteint. Pour lire les fichiers sur la télévision, installer **Kodi** sur un appareil Android TV / Google TV compatible, sur une box externe ou sur Windows ; une télévision Titan OS n'est pas un appareil Android TV.
+
+- Sonarr : https://sonarr.tv/ — installateur Windows x64, **System Tray Application** recommandé pour accéder aux partages SMB sans les contraintes des services Windows ; interface locale `http://localhost:8989`.
+- Radarr : https://radarr.video/ — installateur Windows x64 ; interface `http://localhost:7878`.
+- Prowlarr : https://prowlarr.com/ — installateur Windows x64 ; interface `http://localhost:9696`.
+- Kodi : https://kodi.tv/download/ — installer sur l'appareil de lecture compatible.
+
+Sur Windows, Sonarr et Radarr doivent avoir accès aux dossiers réseau **UNC** (`\\NAS\Media\Series`, `\\NAS\Media\Films`). Le compte utilisé par l'application doit posséder les permissions requises sur le partage SMB. Le client Download Station doit être accessible depuis l'hôte *arr. Après la configuration de Download Station, vérifier l'importation et, si nécessaire, créer un **Remote Path Mapping** depuis `/volume1/Media/Telechargements` vers le chemin UNC Windows correspondant. Cela évite les erreurs de chemins Linux ↔ Windows. Aucun déplacement automatique de fichiers n'est lancé par ce gestionnaire.
+
+### Utiliser le nouvel assistant
+
+Cliquer sur **Configurer Kodi / torrents / *arr**. Saisir les adresses privées (locales/Tailscale) et clés API uniquement des applications déjà installées. Dans chaque app *arr, la clé API se trouve dans **Settings > General**.
+
+- **Prowlarr → Sonarr/Radarr** : création uniquement des liaisons absentes, avec test des services. L'application peut afficher le nombre d'indexeurs configurés, mais elle **n'ajoute pas de source torrent ou tracker** à ta place ; utiliser seulement les services auxquels tu es autorisé à accéder.
+- **Relier Download Station du NAS à Sonarr/Radarr** : option **désactivée par défaut**. Si l'utilisateur la coche, l'assistant vérifie l'accès DSM, récupère le schéma réel du client TorrentDownloadStation depuis les applications, teste les identifiants puis ajoute seulement les clients manquants, sans modifier ni effacer les clients existants. Une erreur de certificat SSL ou de droits DSM interrompt l'ajout.
+- **Kodi** : scan JSON-RPC d'une vidéothèque déjà configurée. Les dossiers SMB doivent être ajoutés une première fois dans Kodi via **Copier chemins Kodi**.
+
+**Confidentialité :** les clés API et le mot de passe DSM ne sont pas écrits dans les paramètres de Synology Media Manager. En revanche, si l'ajout à Sonarr/Radarr est confirmé, ces applications **enregistrent le compte DSM utilisé** dans leur configuration pour accéder à Download Station. Il est préférable d'y utiliser un **compte DSM séparé avec des droits limités**, plutôt que l'administrateur principal. Le gestionnaire ne rend pas les API accessibles sur Internet et n'ouvre pas le pare-feu. Les connexions des applications *arr à DSM se font selon la configuration TLS de leur hôte ; les tests des API restent nécessaires.
+
+### Limites vérifiées
+
+Le programme peut préparer des liaisons vers des services **existants**, pas installer automatiquement Sonarr/Radarr/Prowlarr sur Windows ni configurer les comptes de trackers privés. Les tests automatisés utilisent des réponses API simulées : la première exécution reste à valider sur un hôte réel. La gestion des chemins et des permissions SMB est indispensable avant de s'attendre à une importation automatique.
+
 ## Kodi + Synology sans Plex ni Emby — v0.8.2
 
 **Configuration choisie :** Synology DS218j héberge les dossiers \`Media/Films\`, \`Media/Series\`, \`Media/Telechargements\` et Download Station. Kodi lit directement les fichiers via **SMB** depuis la télévision ou une box compatible. Aucun serveur Plex ni Emby n'est requis, et aucune application payante n'est imposée.
@@ -47,7 +74,7 @@ Dans Synology Media Manager :
 2. **Ouvrir bibliothèque** permet de consulter les dossiers SMB dans l'Explorateur Windows.
 3. **Copier chemins Kodi** copie les deux chemins SMB \`smb://<NAS>/Media/Films/\` et \`smb://<NAS>/Media/Series/\` dans le presse-papiers. C'est une aide à la configuration des sources Kodi, pas une installation ou une modification sur l'appareil Kodi.
 4. Dans Kodi, ajouter les sources \`Films\` et \`Series\` une première fois via **Vidéos > Fichiers > Ajouter une source vidéo**, en utilisant l'adresse locale du Synology accessible **depuis la TV/box**, et les identifiants SMB disposant de l'accès au partage. L'adresse Tailscale du PC ne sera pas forcément accessible depuis une télévision sans Tailscale.
-5. **Intégrer Kodi / *arr** permet ensuite, une fois Kodi installé et son interface JSON-RPC/HTTP autorisée, de demander l'analyse de sa bibliothèque existante. Le scan ne crée pas les sources.
+5. **Configurer Kodi / torrents / *arr** permet ensuite, une fois Kodi installé et son interface JSON-RPC/HTTP autorisée, de demander l'analyse de sa bibliothèque existante. Le scan ne crée pas les sources.
 
 Prowlarr, Sonarr et Radarr restent des services **entièrement optionnels** et doivent déjà tourner sur un autre hôte compatible avant d'être reliés. Ils ne sont pas requis pour regarder des vidéos dans Kodi.
 
