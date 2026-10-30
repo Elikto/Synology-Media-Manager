@@ -1,4 +1,4 @@
-"""Connecteurs locaux optionnels Kodi, Plex et Servarr.
+"""Connecteurs locaux optionnels Kodi et Servarr.
 
 Exécution uniquement depuis Windows et vers une adresse privée / Tailscale.
 Aucun identifiant conservé sur disque, aucune installation sur le DS218j.
@@ -9,11 +9,10 @@ import json
 import re
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
 
 
 SERVICE_PORTS = {"Prowlarr": 9696, "Sonarr": 8989, "Radarr": 7878,
-                 "Kodi": 8080, "Plex": 32400}
+                 "Kodi": 8080}
 APP_API = {"Prowlarr": ("v1",), "Sonarr": ("v5", "v3"), "Radarr": ("v3",)}
 MAX_RESPONSE = 1_000_000
 
@@ -157,62 +156,13 @@ def link_prowlarr(prowlarr, prowlarr_key, targets, opener=None):
     return results
 
 
-def installed_video_servers(packages):
-    """Repère les paquets DSM déjà installés, sans les démarrer ni les modifier."""
-    if not isinstance(packages, list):
-        return set()
-    found = set()
-    for item in packages:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").lower()
-        package_id = str(item.get("id") or item.get("package_id") or "").lower()
-        if ("plex media server" in name or package_id in ("plexmediaserver", "plex")):
-            found.add("Plex")
-        if ("emby server" in name or package_id in ("embyserver", "emby")):
-            found.add("Emby")
-    return found
-
-
-def video_server_address(service, host):
-    """Uniquement les interfaces locales des deux serveurs déjà installables."""
-    paths = {"Plex": (32400, "/web"), "Emby": (8096, "/web/index.html")}
-    if service not in paths:
-        raise ValueError("Serveur vidéo non autorisé.")
-    port, page = paths[service]
-    return service_address(host, port) + page
-
-
-def probe_video_server(service, host, opener=None):
-    """Vérification en lecture seule sans authentification ni donnée privée publiée."""
-    if service == "Plex":
-        raw = local_request(host, 32400, "/identity", opener=opener)
-        root = ET.fromstring(raw)
-        if root.tag != "MediaContainer":
-            raise RuntimeError("Réponse Plex inconnue.")
-        version = str(root.attrib.get("version") or "")
-    elif service == "Emby":
-        # DSM / anciennes versions Emby peuvent exposer /emby ou la racine.
-        last_error = None
-        for path in ("/emby/System/Info/Public", "/System/Info/Public"):
-            try:
-                raw = local_request(host, 8096, path, opener=opener)
-                info = json.loads(raw.decode("utf-8"))
-                if not isinstance(info, dict):
-                    raise RuntimeError("Réponse Emby inconnue.")
-                version = str(info.get("Version") or "")
-                if version:
-                    break
-            except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
-                last_error = error
-        else:
-            raise RuntimeError("Emby ne répond pas sur le port 8096.") from last_error
-    else:
-        raise ValueError("Serveur vidéo non autorisé.")
-    # Ne retourne jamais le nom du NAS, son identifiant serveur ou son adresse.
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,60}", version):
-        raise RuntimeError("Version du serveur non reconnue.")
-    return version
+def kodi_media_paths(host):
+    """Deux sources SMB accessibles depuis Kodi, sans configuration du NAS."""
+    safe = local_host(host)
+    if ":" in safe:
+        safe = "[" + safe + "]"
+    base = "smb://" + safe + "/Media/"
+    return {"Films": base + "Films/", "Series": base + "Series/"}
 
 
 def kodi_scan(host, port, username="", password="", opener=None):
@@ -226,30 +176,3 @@ def kodi_scan(host, port, username="", password="", opener=None):
     return True
 
 
-def plex_scan(host, port, token, opener=None):
-    if not token:
-        raise ValueError("Jeton Plex manquant.")
-    # Plex demande X-Plex-Token, sans l'envoyer dans les URL/logs.
-    class PlexOpener:
-        def __init__(self, origin):
-            self.origin = origin
-        def open(self, request, timeout=7):
-            request.add_header("X-Plex-Token", token)
-            return self.origin.open(request, timeout=timeout)
-    base = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}),
-                                                BlockRedirect())
-    handler = PlexOpener(base)
-    raw = local_request(host, port, "/library/sections", opener=handler)
-    try:
-        root = ET.fromstring(raw)
-        section_ids = [
-            item.attrib["key"] for item in root.findall(".//Directory")
-            if item.attrib.get("type") in ("movie", "show") and
-               re.fullmatch(r"[0-9]+", item.attrib.get("key", ""))
-        ]
-    except ET.ParseError as error:
-        raise RuntimeError("Réponse Plex invalide.") from error
-    for item_id in section_ids:
-        local_request(host, port, "/library/sections/" + item_id + "/refresh",
-                      opener=handler)
-    return len(section_ids)
