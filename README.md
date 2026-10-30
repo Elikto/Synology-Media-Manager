@@ -16,7 +16,7 @@ Un seul fichier portable Windows 11 : télécharger puis **double-cliquer sur le
 
 Application Windows de gestion **locale** d'un NAS Synology DSM, développée en Python et distribuée sous forme d'un **.exe autonome**. L'application fonctionne sur le PC de l'utilisateur pour accéder à son NAS via HTTPS/Tailscale ; ChatGPT n'a pas de connexion directe au réseau privé.
 
-**Version 0.8.1 : Plex et Emby détectés automatiquement sur le NAS avec test de disponibilité et boutons d'accès direct.** Le centre d'intégrations *arr/Kodi/Plex et le suivi Download Station restent disponibles.
+**Version 0.8.2 : configuration orientée Kodi + SMB + Download Station, sans Plex ni Emby.** Copie des chemins Kodi en un clic et intégrations *arr facultatives sur un autre appareil compatible. Aucun paquet DSM n'est désinstallé.
 
 ## Installation initiale (une seule fois)
 
@@ -37,39 +37,21 @@ Les mots de passe ne sont pas enregistrés.
 
 **Prudence** : un UNC non nul sur le disque 1 impose une surveillance SMART et des sauvegardes indépendantes pour les fichiers irremplaçables. Les scripts ne remplacent pas une vraie sauvegarde.
 
-## Plex et Emby déjà installés — v0.8.1
+## Kodi + Synology sans Plex ni Emby — v0.8.2
 
-Dès l'**audit DSM**, l'application reconnaît les paquets `Plex Media Server` et `Emby Server` déjà présents, sans tenter une réinstallation. Le tableau de bord vérifie ensuite **en lecture seule**, sur les ports locaux standards, si Plex (32400, API `/identity`) et Emby (8096, API `/emby/System/Info/Public`) répondent. Les identifiants uniques des serveurs sont ignorés ; seule une version technique non sensible peut être affichée.
+**Configuration choisie :** Synology DS218j héberge les dossiers \`Media/Films\`, \`Media/Series\`, \`Media/Telechargements\` et Download Station. Kodi lit directement les fichiers via **SMB** depuis la télévision ou une box compatible. Aucun serveur Plex ni Emby n'est requis, et aucune application payante n'est imposée.
 
-Les boutons **Ouvrir Plex** et **Ouvrir Emby** sont activés uniquement lorsque les paquets correspondants ont été détectés par DSM. Ils ouvrent les interfaces web sur l'adresse du NAS déjà configurée (LAN/Tailscale). Les ports standards peuvent être différents si l'utilisateur les a modifiés ; dans ce cas, le test peut afficher « installé mais port non accessible » sans signifier que le serveur est arrêté.
+Dans Synology Media Manager :
 
-Le formulaire d'intégration Prowlarr/Sonarr/Radarr ne préremplit plus `127.0.0.1`. Ces applications ne figurent pas dans la liste des paquets du DS218j et ne sont pas installées automatiquement. Leurs adresses et clés API sont nécessaires **seulement** si elles existent sur un autre hôte compatible.
+1. **Auditer DSM** et **Configurer automatiquement** préparent le partage et Download Station comme auparavant.
+2. **Ouvrir bibliothèque** permet de consulter les dossiers SMB dans l'Explorateur Windows.
+3. **Copier chemins Kodi** copie les deux chemins SMB \`smb://<NAS>/Media/Films/\` et \`smb://<NAS>/Media/Series/\` dans le presse-papiers. C'est une aide à la configuration des sources Kodi, pas une installation ou une modification sur l'appareil Kodi.
+4. Dans Kodi, ajouter les sources \`Films\` et \`Series\` une première fois via **Vidéos > Fichiers > Ajouter une source vidéo**, en utilisant l'adresse locale du Synology accessible **depuis la TV/box**, et les identifiants SMB disposant de l'accès au partage. L'adresse Tailscale du PC ne sera pas forcément accessible depuis une télévision sans Tailscale.
+5. **Intégrer Kodi / *arr** permet ensuite, une fois Kodi installé et son interface JSON-RPC/HTTP autorisée, de demander l'analyse de sa bibliothèque existante. Le scan ne crée pas les sources.
 
-**Attention :** « paquet installé » ne signifie pas « serveur démarré et bibliothèque configurée ». Kodi, Plex et Emby peuvent lire directement les formats compatibles, mais le DS218j n'est pas adapté au transcodage vidéo lourd. Aucun partage, fichier, paquet, RAID ni règle de pare-feu n'est modifié par ces vérifications.
+Prowlarr, Sonarr et Radarr restent des services **entièrement optionnels** et doivent déjà tourner sur un autre hôte compatible avant d'être reliés. Ils ne sont pas requis pour regarder des vidéos dans Kodi.
 
-## Centre d'intégrations *arr, Kodi et Plex — v0.8.0
-
-Cliquer sur **Intégrer Kodi / Plex / *arr** dans l'application. Ce bouton ouvre une seule fenêtre permettant de renseigner les adresses privées (LAN ou Tailscale) des services et leurs clés API, puis de valider une **seule opération** « Tester et connecter les services ».
-
-Le gestionnaire :
-1. Détecte Prowlarr, Sonarr (API v5/v3) et Radarr (API v3), si les services sont joignables et qu'une clé API est renseignée.
-2. Interroge le schéma *réel* des applications Prowlarr et crée les liaisons Prowlarr → Sonarr et Radarr **uniquement si elles n'existent pas déjà**, avec synchronisation prudente `addOnly`. Si la version Prowlarr refuse le schéma ou la configuration, le programme conserve les paramètres existants et journalise le refus.
-3. Demande à **Kodi** de scanner ses sources vidéo existantes via `VideoLibrary.Scan`, à condition que le serveur HTTP/JSON-RPC ait été autorisé dans Kodi.
-4. Demande à **Plex Media Server** de rafraîchir les bibliothèques Films et Séries déjà créées, à l'aide du jeton Plex fourni.
-
-Les clés API restent **uniquement en mémoire pendant l'action**, ne sont pas enregistrées dans un fichier, ni publiées sur GitHub. Les connexions directes sont limitées aux hôtes privés/Tailscale, sans redirection HTTP ; pour les services HTTP, le réseau LAN ou le tunnel Tailscale doit être digne de confiance. Les champs vides sont ignorés.
-
-### Prérequis matériels non contournables
-
-Le DS218j est un NAS ARMv7 32 bits doté de 512 Mo de RAM. Les images Docker actuelles de Prowlarr, Sonarr et Plex Media Server (LinuxServer.io) sont prévues pour x86-64 ou ARM64 : **ce programme ne tente pas de les installer sur le DS218j** et ne force pas Docker. Pour que la chaîne tourne avec le PC Windows éteint, il faut **un autre serveur x64/ARM64 qui reste allumé** (mini-PC, autre NAS compatible, VPS privé, etc.). Sans ce second hôte, Download Station peut continuer sur le Synology, mais les composants *arr externes ne s'exécutent pas 24 h/24. Les logiciels doivent être déjà installés sur leur hôte compatible : ce centre automatise la **connexion et la synchronisation**, pas une installation sur du matériel absent.
-
-### Kodi / Plex
-
-Le scan Kodi exige des sources SMB ou NFS déjà configurées sur l'appareil Kodi et l'accès HTTP/JSON-RPC activé. L'API Kodi `VideoLibrary.Scan` ne crée pas de sources. Plex doit déjà être lancé et posséder des sections Films/Séries ; son scanner ne remplace pas la configuration initiale du serveur. Aucune installation de Plex sur le DS218j n'est imposée.
-
-**Liaison Prowlarr :** les URL envoyées à Prowlarr doivent être joignables **depuis son propre hôte**, pas uniquement depuis Windows. Si les services sont hébergés sur des machines différentes, utiliser leur IP locale/Tailscale plutôt que `127.0.0.1`.
-
-Les tests Windows simulent ces services : les connexions et API ne sont pas encore validées sur ton propre équipement. Aucun fichier multimédia n'est supprimé ni déplacé et aucun paramètre SHR/RAID n'est modifié.
+**La mise à jour retire toutes les commandes Plex/Emby, les connexions aux API Plex/Emby et leurs boutons.** Elle **ne désinstalle pas les paquets actuellement installés sur le NAS**, ne supprime aucune bibliothèque ou fichier et ne modifie ni le RAID ni les règles réseau. Les paquets peuvent encore figurer dans la liste exhaustive de l'audit DSM, ce qui reflète leur présence réelle, sans être utilisés.
 
 ## Suivi automatique du NAS — v0.7.0
 
