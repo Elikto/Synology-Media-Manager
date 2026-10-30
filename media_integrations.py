@@ -156,6 +156,16 @@ def link_prowlarr(prowlarr, prowlarr_key, targets, opener=None):
     return results
 
 
+def prowlarr_indexer_count(host, port, key, opener=None):
+    """Nombre de sources déjà configurées par l'utilisateur, sans les modifier."""
+    if not key:
+        raise ValueError("Clé Prowlarr manquante.")
+    result = api_json(host, port, "/api/v1/indexer", key, opener=opener)
+    if not isinstance(result, list):
+        raise RuntimeError("Liste d'indexeurs Prowlarr non valide.")
+    return len(result)
+
+
 def downloadstation_client_payload(schemas, nas_host, nas_port, username, password,
                                    category):
     """Prépare uniquement le modèle TorrentDownloadStation fourni par l'API *arr."""
