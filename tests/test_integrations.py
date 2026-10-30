@@ -94,6 +94,78 @@ class IntegrationsTests(unittest.TestCase):
                               if f["name"] == "apiKey"), "sonarr-key")
         self.assertNotIn("sonarr-key", post[0][0])
 
+    def test_downloadstation_client_schema_is_safe_and_complete(self):
+        schema = [{"implementation": "TorrentDownloadStation",
+                   "fields": [{"name": name} for name in
+                     ("host", "port", "useSsl", "username", "password",
+                      "tvCategory", "tvDirectory")],
+                   "removeCompletedDownloads": True}]
+        payload = mod.downloadstation_client_payload(
+            schema, "100.68.10.95", 5001, "media_user", "secret", "sonarr")
+        fields = {item["name"]: item["value"] for item in payload["fields"]}
+        self.assertEqual(fields["host"], "100.68.10.95")
+        self.assertTrue(fields["useSsl"])
+        self.assertEqual(fields["tvCategory"], "sonarr")
+        self.assertEqual(fields["tvDirectory"], "")
+        self.assertFalse(payload["removeCompletedDownloads"])
+        self.assertNotIn("value", schema[0]["fields"][0])
+        with self.assertRaises(RuntimeError):
+            mod.downloadstation_client_payload(
+                [{"implementation": "TorrentDownloadStation", "fields": []}],
+                "100.68.10.95", 5001, "user", "pw", "radarr")
+        with self.assertRaises(ValueError):
+            mod.downloadstation_client_payload(schema, "8.8.8.8", 5001,
+                                               "user", "password", "radarr")
+
+    def test_downloadstation_link_idempotence_without_writes(self):
+        addr = "http://127.0.0.1:8989"
+        opener = FakeOpener({
+            (addr + "/api/v5/system/status", "GET"):
+                encode({"version": "5.0.0"}),
+            (addr + "/api/v5/downloadclient", "GET"):
+                encode([{"id": 12, "implementation": "TorrentDownloadStation",
+                         "fields": [{"name": "host", "value": "100.68.10.95"},
+                                    {"name": "port", "value": 5001},
+                                    {"name": "tvCategory", "value": "sonarr"}]}]),
+        })
+        result = mod.link_downloadstation_to_arr(
+            "Sonarr", "127.0.0.1", 8989, "arr-api-key", "100.68.10.95", 5001,
+            "media_user", "nas_password", opener=opener)
+        self.assertEqual(result, "déjà configuré, aucune modification")
+        self.assertTrue(all(method == "GET" for _, method, _, _ in opener.calls))
+
+    def test_downloadstation_add_requires_server_test(self):
+        addr = "http://127.0.0.1:7878"
+        fields = ["host", "port", "useSsl", "username", "password", "tvCategory"]
+        mapping = {
+            (addr + "/api/v3/system/status", "GET"):
+                encode({"version": "5.1.0"}),
+            (addr + "/api/v3/downloadclient", "GET"): encode([]),
+            (addr + "/api/v3/downloadclient/schema", "GET"):
+                encode([{"implementation": "TorrentDownloadStation",
+                         "fields": [{"name": name} for name in fields]}]),
+            (addr + "/api/v3/downloadclient/test", "POST"):
+                encode([{"error": "The NAS was not reachable"}]),
+        }
+        opener = FakeOpener(mapping)
+        with self.assertRaises(RuntimeError):
+            mod.link_downloadstation_to_arr(
+                "Radarr", "127.0.0.1", 7878, "arr-key",
+                "100.68.10.95", 5001, "user", "pw", opener=opener)
+        self.assertEqual([method for _, method, _, _ in opener.calls][-1], "POST")
+        self.assertFalse(any(url.endswith("/downloadclient") and method == "POST"
+                             for url, method, _, _ in opener.calls))
+
+    def test_prowlarr_indexers_count_read_only(self):
+        opener = FakeOpener({
+            ("http://127.0.0.1:9696/api/v1/indexer", "GET"):
+                encode([{"id": 1}, {"id": 2}])
+        })
+        self.assertEqual(mod.prowlarr_indexer_count(
+            "127.0.0.1", 9696, "key", opener=opener), 2)
+        self.assertEqual(len(opener.calls), 1)
+        self.assertEqual(opener.calls[0][1], "GET")
+
     def test_kodi_media_paths_only_include_media_library(self):
         expected = {
             "Films": "smb://192.168.1.12/Media/Films/",
